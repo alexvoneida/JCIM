@@ -1,0 +1,9 @@
+node_modules
+out
+release
+.git
+.github
+*.log
+.DS_Store
+test-results
+playwright-report

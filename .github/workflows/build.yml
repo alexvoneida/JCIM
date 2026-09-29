@@ -1,0 +1,151 @@
+name: Build
+
+# Branch pushes run only the fast checks; pull requests run only the platform
+# builds, so a push to a branch with an open PR doesn't run any job twice.
+# Pushes to main run everything and publish a release.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  checks:
+    name: Lint, typecheck, unit tests
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  windows-linux:
+    name: Windows + Linux (Docker)
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: artifacts
+          outputs: type=local,dest=release
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-linux
+          path: release/*
+          if-no-files-found: error
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Test the Linux AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's sandbox relies on.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || sudo apt-get install -y xvfb
+          chmod +x release/*.AppImage
+          JCIM_EXECUTABLE="$(ls "$PWD"/release/*.AppImage)" xvfb-run --auto-servernum npm run test:e2e
+
+  windows-install:
+    name: Windows install test
+    needs: windows-linux
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-linux
+          path: release
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Install silently and verify shortcuts
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release\*-Setup-*.exe | Select-Object -First 1
+          Start-Process $installer.FullName -ArgumentList '/S' -Wait
+          # The single-instance lock would make the test's launch exit if the installer started the app.
+          Stop-Process -Name JCIM -ErrorAction SilentlyContinue
+
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter JCIM.exe | Select-Object -First 1
+          if (-not $exe) { throw 'JCIM.exe was not installed under %LOCALAPPDATA%\Programs' }
+
+          $shortcuts = @(
+            (Join-Path ([Environment]::GetFolderPath('Desktop')) 'JCIM.lnk'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\JCIM.lnk')
+          )
+          foreach ($shortcut in $shortcuts) {
+            if (-not (Test-Path $shortcut)) { throw "Missing shortcut: $shortcut" }
+          }
+
+          "JCIM_EXECUTABLE=$($exe.FullName)" >> $env:GITHUB_ENV
+      - name: Test the installed app
+        run: npm run test:e2e
+
+  macos:
+    name: macOS
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:mac
+      - name: Test the packaged app
+        run: JCIM_EXECUTABLE="$PWD/release/mac-universal/JCIM.app/Contents/MacOS/JCIM" npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: release/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [checks, windows-linux, windows-install, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="v${version}-build.${RUN_NUMBER}"
+          gh release create "$tag" release/* \
+            --target "$GITHUB_SHA" \
+            --title "JCIM $tag" \
+            --generate-notes \
+            --latest
