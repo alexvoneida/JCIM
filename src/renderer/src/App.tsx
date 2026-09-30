@@ -20,6 +20,9 @@ export default function App() {
         <dd>{appVersion}</dd>
         <dt>Electron</dt>
         <dd>{electron}</dd>
+        <button
+            onClick={async () => {console.log(await window.api.parseSheet())}}
+        >Parse Excel Sheet</button>
       </dl>
     </main>
   )

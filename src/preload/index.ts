@@ -5,7 +5,8 @@ const api: DesktopApi = {
   versions: {
     electron: process.versions.electron
   },
-  getAppVersion: () => ipcRenderer.invoke(IpcChannel.getAppVersion)
+  getAppVersion: () => ipcRenderer.invoke(IpcChannel.getAppVersion),
+  parseSheet: () => ipcRenderer.invoke(IpcChannel.parseSheet)
 }
 
 contextBridge.exposeInMainWorld('api', api)

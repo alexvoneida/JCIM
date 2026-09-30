@@ -56,5 +56,8 @@
     "electron-winstaller": false,
     "esbuild": false,
     "fsevents": false
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
   }
 }

@@ -1,5 +1,6 @@
 export const IpcChannel = {
-  getAppVersion: 'app:get-version'
+  getAppVersion: 'app:get-version',
+  parseSheet: 'app:parse-sheet'
 } as const
 
 export interface DesktopApi {
@@ -7,4 +8,5 @@ export interface DesktopApi {
     electron: string
   }
   getAppVersion: () => Promise<string>
+  parseSheet: () => Promise<string>
 }
