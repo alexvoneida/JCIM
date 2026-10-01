@@ -53,7 +53,7 @@ test('exposes only the preload API to the renderer', async () => {
   expect(globals).toEqual({
     require: 'undefined',
     process: 'undefined',
-    api: ['getAppVersion', 'versions']
+    api: ['exportSheet', 'getAppVersion', 'parseSheet', 'versions']
   })
 })
 
