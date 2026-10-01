@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Student } from '../../shared/student'
 
 export default function App() {
   const [appVersion, setAppVersion] = useState('…')
@@ -11,6 +12,11 @@ export default function App() {
       .catch(() => setAppVersion('unknown'))
   }, [])
 
+  async function handleClick() {
+    const students: {[key: string] : Student} = await window.api.parseSheet();
+    console.log(students);
+    }
+
   return (
     <main>
       <h1>Hello from JCIM</h1>
@@ -21,7 +27,7 @@ export default function App() {
         <dt>Electron</dt>
         <dd>{electron}</dd>
         <button
-            onClick={async () => {console.log(await window.api.parseSheet())}}
+            onClick={() => {void handleClick()}}
         >Parse Excel Sheet</button>
       </dl>
     </main>
