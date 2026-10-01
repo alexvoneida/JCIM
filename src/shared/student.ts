@@ -1,13 +1,12 @@
-
 import { InterviewResult } from './interviewResult'
 
 export class Student {
-    name: string = "";
-    interviewResults: InterviewResult[] = [];
+  name: string = ''
+  interviewResults: InterviewResult[] = []
 
-    constructor() {}
+  constructor() {}
 
-    addInterviewResult(result: InterviewResult) {
-        this.interviewResults.push(result);
-    }
+  addInterviewResult(result: InterviewResult) {
+    this.interviewResults.push(result)
+  }
 }

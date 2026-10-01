@@ -63,7 +63,9 @@ if (!app.requestSingleInstanceLock()) {
 
       ipcMain.handle(IpcChannel.parseSheet, parseSheet)
 
-      ipcMain.handle(IpcChannel.exportSheet, (_evt, students: {[key: string] : Student}) => exportSheet(students))
+      ipcMain.handle(IpcChannel.exportSheet, (_evt, students: { [key: string]: Student }) =>
+        exportSheet(students)
+      )
 
       createWindow()
 
