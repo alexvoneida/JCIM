@@ -13,6 +13,8 @@ export async function parseSheet() {
     });
     const chosenPath = dialogReturn.filePaths[0];
 
+    if (!chosenPath) return;
+
     // open that excel spreadsheet
     const file = new ExcelJS.Workbook();
     await file.xlsx.readFile(chosenPath);
@@ -20,11 +22,11 @@ export async function parseSheet() {
     // parse sheet into Students
     const students: {[key: string] : Student} = {};
 
-    // ingest student fit data. passed by ref, so no need to return
+    // ingest student fit data. mutates students, so no need to return
     ingestStudentFit(file, students);
 
 
-    // ingest employer fit data. passed by ref, so no need to return
+    // ingest employer fit data. mutates students, so no need to return
     ingestEmployerFit(file, students);
 
     
@@ -55,7 +57,7 @@ function ingestStudentFit(file: ExcelJS.Workbook, students: {[key: string] : Stu
 
     for (const [waveNum, waveCol] of Object.entries(waveColumns)) { // loop through each wave
         studentFitSheet.getColumn(waveCol).eachCell((cell, rowNum) => { // in a wave, iterate down the rows
-            if (cell.text === null || cell.text === "" || rowNum<3) return; // heading or blank
+            if (cell.text === "" || rowNum<3) return; // heading or blank
 
             const isStudent = currentStudent == undefined || isNaN(Number(cell.text));
 
@@ -80,6 +82,7 @@ function ingestStudentFit(file: ExcelJS.Workbook, students: {[key: string] : Stu
                 currentStudent!.addInterviewResult(result);
             }
         })
+        currentStudent = undefined;
     }
 }
 
@@ -109,8 +112,12 @@ function ingestEmployerFit(file: ExcelJS.Workbook, students: {[key: string] : St
 
         // for each student in a column
         employerFitSheet.getColumn(currentColumn-1).eachCell((cell, rowNum) => {
+            if (rowNum < 3 || cell.text == "") return; // heading text
             const student = students[cell.text.trim()];
-            if (!student) return;
+            if (!student) {
+                console.log(`Student ${cell.text} has an employer fit with ${currentEmployer}, but no student fit data.`);
+                return;
+            }
 
             // update their results variable to show employer results
             student.interviewResults.forEach((result: InterviewResult) => {
@@ -127,4 +134,29 @@ function ingestEmployerFit(file: ExcelJS.Workbook, students: {[key: string] : St
 
         currentColumn += (notesIdx == -1 ? 5 : 6);
     }
+}
+
+
+export async function exportSheet(students: {[key: string] : Student}) {
+    // create new file
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Student Data');
+
+    let i = 1;
+    for (const [studentName, student] of Object.entries(students)) {
+        sheet.getCell(i, 1).value = studentName;
+        sheet.getCell(i, 2).value = student.interviewResults.length + " interviews";
+        i++;
+    }
+
+
+    // let the user select a location
+    const dialogReturn = await dialog.showSaveDialog({
+        defaultPath: "studentSheet.xlsx"
+    });
+    const chosenPath = dialogReturn.filePath;
+    if (!chosenPath) return;
+
+    // save the file
+    await workbook.xlsx.writeFile(chosenPath);
 }

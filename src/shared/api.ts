@@ -2,7 +2,8 @@ import { Student } from '../shared/student';
 
 export const IpcChannel = {
   getAppVersion: 'app:get-version',
-  parseSheet: 'app:parse-sheet'
+  parseSheet: 'app:parse-sheet',
+  exportSheet: 'app:export-sheet'
 } as const
 
 export interface DesktopApi {
@@ -11,4 +12,5 @@ export interface DesktopApi {
   }
   getAppVersion: () => Promise<string>
   parseSheet: () => Promise<{[key: string] : Student}>
+  exportSheet: (students: {[key: string] : Student}) => Promise<void>
 }

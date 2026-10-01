@@ -13,33 +13,33 @@ export class InterviewResult {
     rank: number;
 
     // values from employer fit
-    employerAccept: boolean | undefined = undefined;
-    employerTransport: boolean | undefined = undefined;
-    employerSkills: boolean | undefined = undefined;
-    employerPositions: string | undefined = undefined;
-    employerNotes: string | undefined = undefined;
+    employerAccept: boolean | undefined;
+    employerTransport: boolean | undefined;
+    employerSkills: boolean | undefined;
+    employerPositions: string | undefined;
+    employerNotes: string | undefined;
 
     constructor(student: string, wave: string, business: string, position: string, location: string, excitement: string, acceptance: string, rank: string) {
         this.student = student;
         this.wave = Number(wave);
         this.business = business;
         this.position = position;
-        this.location = this.#stringToBool(location);
-        this.excitement = this.#stringToBool(excitement);
-        this.acceptance = this.#stringToBool(acceptance);
+        this.location = InterviewResult.stringToBool(location);
+        this.excitement = InterviewResult.stringToBool(excitement);
+        this.acceptance = InterviewResult.stringToBool(acceptance);
         this.rank = Number(rank);
     }
 
     setEmployerData(employerAccept: string, employerTransport: string, employerSkills: string, employerPositions: string, employerNotes: string) {
-        this.employerAccept = this.#stringToBool(employerAccept);
-        this.employerTransport = this.#stringToBool(employerTransport);
-        this.employerSkills = this.#stringToBool(employerSkills);
+        this.employerAccept = InterviewResult.stringToBool(employerAccept);
+        this.employerTransport = InterviewResult.stringToBool(employerTransport);
+        this.employerSkills = InterviewResult.stringToBool(employerSkills);
         this.employerPositions = employerPositions;
         this.employerNotes = employerNotes;
     }
 
-    #stringToBool(s: string): boolean | undefined {
-        s = s.trim().toLocaleLowerCase();
+    private static stringToBool(s: string): boolean | undefined {
+        s = s.trim().toLowerCase();
 
         if (s=="yes") return true;
         if (s=="no") return false;
