@@ -40,7 +40,7 @@ function ingestStudentFit(file: ExcelJS.Workbook, students: { [key: string]: Stu
   // find what columns each wave starts in
   const waveColumns: { [key: number]: number } = {}
   studentFitSheet.getRow(2).eachCell((cell, colNum) => {
-    if (cell.text.startsWith('Wave #')) {
+    if (cell.text.match(/^Wave #[0-9]+$/i)) {
       const waveNum = Number(cell.text.slice(6))
       if (waveNum in waveColumns) return // already seen this wave
       waveColumns[waveNum] = colNum
