@@ -15,6 +15,7 @@ export default function App() {
 
   async function parseSheet() {
     const result = await window.api.parseSheet()
+    if (result == null) return
     setStudents(result)
   }
 

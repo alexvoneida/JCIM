@@ -1,4 +1,4 @@
-import { dialog } from 'electron'
+import { BrowserWindow, dialog, IpcMainInvokeEvent } from 'electron'
 
 import ExcelJS from 'exceljs'
 
@@ -13,7 +13,7 @@ export async function parseSheet() {
   })
   const chosenPath = dialogReturn.filePaths[0]
 
-  if (!chosenPath) return
+  if (!chosenPath) return null
 
   // open that excel spreadsheet
   const file = new ExcelJS.Workbook()
@@ -73,7 +73,7 @@ function ingestStudentFit(file: ExcelJS.Workbook, students: { [key: string]: Stu
           currentStudent!.name,
           waveNum,
           studentFitSheet.getCell(rowNum, 1 + waveCol).text,
-          studentFitSheet.getCell(rowNum, 2 + waveCol).text,
+          studentFitSheet.getCell(rowNum, 2 + waveCol).text.trim(),
           studentFitSheet.getCell(rowNum, 3 + waveCol).text,
           studentFitSheet.getCell(rowNum, 4 + waveCol).text,
           studentFitSheet.getCell(rowNum, 5 + waveCol).text,
@@ -94,7 +94,7 @@ function ingestEmployerFit(file: ExcelJS.Workbook, students: { [key: string]: St
   let currentColumn = 2
   let currentEmployer: string
   while (true) {
-    currentEmployer = employerFitSheet.getCell(2, currentColumn).text
+    currentEmployer = employerFitSheet.getCell(2, currentColumn).text.trim()
     if (currentEmployer == '') break
 
     // find what indices the column headings are at. These are flexible because they sometimes have a blank notes coloumn, sometimes not.
@@ -106,6 +106,12 @@ function ingestEmployerFit(file: ExcelJS.Workbook, students: { [key: string]: St
     const positionsIdx = colHeadings.findIndex((heading) => heading == 'Positions')
     let notesIdx = colHeadings.findIndex((heading) => heading == 'Notes')
     if (notesIdx == -1) notesIdx = colHeadings.findIndex((heading) => heading == '')
+
+    if (transportIdx == -1 || skillsIdx == -1 || positionsIdx == -1) {
+      throw Error(
+        `Error parsing employer sheet. The group on column ${currentColumn} is missing transport, skills, or position.`
+      )
+    }
 
     // for each student in a column
     employerFitSheet.getColumn(currentColumn - 1).eachCell((cell, rowNum) => {
@@ -124,10 +130,10 @@ function ingestEmployerFit(file: ExcelJS.Workbook, students: { [key: string]: St
 
         result.setEmployerData(
           employerFitSheet.getCell(rowNum, currentColumn).text,
-          employerFitSheet.getCell(rowNum, currentColumn + transportIdx).text,
-          employerFitSheet.getCell(rowNum, currentColumn + skillsIdx).text,
-          employerFitSheet.getCell(rowNum, currentColumn + positionsIdx).text,
-          employerFitSheet.getCell(rowNum, currentColumn + notesIdx).text
+          employerFitSheet.getCell(rowNum, currentColumn + 1 + transportIdx).text,
+          employerFitSheet.getCell(rowNum, currentColumn + 1 + skillsIdx).text,
+          employerFitSheet.getCell(rowNum, currentColumn + 1 + positionsIdx).text,
+          employerFitSheet.getCell(rowNum, currentColumn + 1 + notesIdx).text
         )
       })
     })
@@ -136,7 +142,7 @@ function ingestEmployerFit(file: ExcelJS.Workbook, students: { [key: string]: St
   }
 }
 
-export async function exportSheet(students: { [key: string]: Student }) {
+export async function exportSheet(event: IpcMainInvokeEvent, students: { [key: string]: Student }) {
   // create new file
   const workbook = new ExcelJS.Workbook()
   const sheet = workbook.addWorksheet('Student Data')
@@ -149,12 +155,15 @@ export async function exportSheet(students: { [key: string]: Student }) {
   }
 
   // let the user select a location
-  const dialogReturn = await dialog.showSaveDialog({
-    defaultPath: 'studentSheet.xlsx'
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (!window) throw Error('No parent window found!')
+  const dialogReturn = await dialog.showSaveDialog(window, {
+    defaultPath: 'studentSheet.xlsx',
+    filters: [{ name: 'Excel File', extensions: ['xlsx'] }]
   })
-  const chosenPath = dialogReturn.filePath
-  if (!chosenPath) return
+
+  if (dialogReturn.canceled) return
 
   // save the file
-  await workbook.xlsx.writeFile(chosenPath)
+  await workbook.xlsx.writeFile(dialogReturn.filePath)
 }
