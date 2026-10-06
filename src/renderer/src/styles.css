@@ -24,3 +24,43 @@ dd {
   margin: 0;
   font-family: ui-monospace, monospace;
 }
+
+.company-columns {
+  display: flex;
+  gap: 24px;
+  margin: 30px 0;
+}
+
+.company-column {
+  flex: 1;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.company-column h2 {
+  margin-top: 0;
+}
+
+.student {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-top: 1px solid #eee;
+}
+
+button {
+  padding: 10px 20px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.matches {
+  margin-top: 30px;
+}
+
+.match {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+}

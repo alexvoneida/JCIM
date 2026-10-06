@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import InternshipMatching from './InternshipMatching'
 
 export default function App() {
   const [appVersion, setAppVersion] = useState('…')
   const { electron } = window.api.versions
+  const [page, setPage] = useState('home')
 
   useEffect(() => {
     window.api
@@ -10,6 +12,10 @@ export default function App() {
       .then(setAppVersion)
       .catch(() => setAppVersion('unknown'))
   }, [])
+
+  if (page === 'matching') {
+    return <InternshipMatching />
+  }
 
   return (
     <main>
@@ -21,6 +27,9 @@ export default function App() {
         <dt>Electron</dt>
         <dd>{electron}</dd>
       </dl>
+          <button onClick={() => setPage('matching')}>
+        Internship Matching
+      </button>
     </main>
   )
 }
