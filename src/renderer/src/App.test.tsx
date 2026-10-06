@@ -5,7 +5,12 @@ import App from './App'
 beforeEach(() => {
   window.api = {
     versions: { electron: '1.0.0' },
-    getAppVersion: vi.fn().mockResolvedValue('9.9.9')
+    getAppVersion: vi.fn().mockResolvedValue('9.9.9'),
+    parseSheet: vi.fn().mockResolvedValue({
+      Alice: { name: 'Alice', interviewResults: [] },
+      Bob: { name: 'Bob', interviewResults: [] }
+    }),
+    exportSheet: vi.fn().mockResolvedValue(async () => {})
   }
 })
 

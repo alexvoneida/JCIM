@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { Student } from '../../shared/student'
 
 export default function App() {
   const [appVersion, setAppVersion] = useState('…')
+  const [students, setStudents] = useState<Record<string, Student>>({})
   const { electron } = window.api.versions
 
   useEffect(() => {
@@ -10,6 +12,25 @@ export default function App() {
       .then(setAppVersion)
       .catch(() => setAppVersion('unknown'))
   }, [])
+
+  async function parseSheet() {
+    const result = await window.api.parseSheet()
+    if (result == null) return
+    setStudents(result)
+  }
+
+  function renderStudents() {
+    const studentViews = []
+    for (const [studentName, student] of Object.entries(students)) {
+      const numInterviews = student.interviewResults.length
+      studentViews.push(
+        <p key={studentName}>
+          {studentName}: {numInterviews} interviews.
+        </p>
+      )
+    }
+    return <div>{studentViews}</div>
+  }
 
   return (
     <main>
@@ -21,6 +42,21 @@ export default function App() {
         <dt>Electron</dt>
         <dd>{electron}</dd>
       </dl>
+      <button
+        onClick={() => {
+          void parseSheet()
+        }}
+      >
+        Parse Excel Sheet
+      </button>
+      <button
+        onClick={() => {
+          void window.api.exportSheet(students)
+        }}
+      >
+        Save New Sheet
+      </button>
+      {renderStudents()}
     </main>
   )
 }
