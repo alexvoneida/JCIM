@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Student } from '../../shared/student'
+import InternshipMatching from './InternshipMatching'
+import type { Student } from '../../shared/student'
 
 export default function App() {
   const [appVersion, setAppVersion] = useState('…')
   const [students, setStudents] = useState<Record<string, Student>>({})
   const { electron } = window.api.versions
+  const [page, setPage] = useState('home')
 
   useEffect(() => {
     window.api
@@ -12,6 +14,10 @@ export default function App() {
       .then(setAppVersion)
       .catch(() => setAppVersion('unknown'))
   }, [])
+
+  if (page === 'matching') {
+    return <InternshipMatching onBack={() => setPage('home')} />
+  }
 
   async function parseSheet() {
     const result = await window.api.parseSheet()
@@ -42,6 +48,7 @@ export default function App() {
         <dt>Electron</dt>
         <dd>{electron}</dd>
       </dl>
+      <button onClick={() => setPage('matching')}>Internship Matching</button>
       <button
         onClick={() => {
           void parseSheet()

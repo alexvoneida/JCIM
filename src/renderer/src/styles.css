@@ -24,3 +24,95 @@ dd {
   margin: 0;
   font-family: ui-monospace, monospace;
 }
+
+.company-columns {
+  display: flex;
+  gap: 24px;
+  margin: 30px 0;
+}
+
+.company-column {
+  flex: 1;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.company-column h2 {
+  margin-top: 0;
+}
+
+.student {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-top: 1px solid #eee;
+}
+
+button {
+  padding: 10px 20px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.matches {
+  margin-top: 30px;
+}
+
+.match {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+}
+
+/* Keep the original layout and system colors; add only disclosure styling. */
+summary {
+  cursor: pointer;
+}
+
+.match {
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.placement-explanation {
+  font-size: 14px;
+}
+
+.placement-explanation summary {
+  width: fit-content;
+}
+
+.placement-explanation[open] {
+  flex-basis: 100%;
+}
+
+.explanation-content {
+  max-width: 640px;
+  padding: 0 12px;
+  border-left: 1px solid #ccc;
+  line-height: 1.5;
+}
+
+.matching-rules {
+  max-width: 640px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+@media (max-width: 700px) {
+  .company-columns {
+    flex-wrap: wrap;
+  }
+
+  .company-column {
+    flex-basis: 220px;
+  }
+}
