@@ -7,13 +7,7 @@ type Edge = {
   cost: number
 }
 
-function addEdge(
-  graph: Edge[][],
-  from: number,
-  to: number,
-  capacity: number,
-  cost: number
-): Edge {
+function addEdge(graph: Edge[][], from: number, to: number, capacity: number, cost: number): Edge {
   const forward: Edge = {
     to,
     rev: graph[to].length,
@@ -35,9 +29,7 @@ function addEdge(
   return forward
 }
 
-export function matchInternships(
-  input: MatchingInput
-): MatchingResult {
+export function matchInternships(input: MatchingInput): MatchingResult {
   const { companyLikes, studentRatings, companyCapacities } = input
 
   const students = Array.from(studentRatings.keys())
@@ -47,18 +39,11 @@ export function matchInternships(
   const studentStart = 1
   const companyStart = studentStart + students.length
   const sink = companyStart + companies.length
-  const graph: Edge[][] = Array.from(
-    { length: sink + 1 },
-    () => []
-  )
+  const graph: Edge[][] = Array.from({ length: sink + 1 }, () => [])
 
-  const studentIndex = new Map(
-    students.map((student, i) => [student, studentStart + i])
-  )
+  const studentIndex = new Map(students.map((student, i) => [student, studentStart + i]))
 
-  const companyIndex = new Map(
-    companies.map((company, i) => [company, companyStart + i])
-  )
+  const companyIndex = new Map(companies.map((company, i) => [company, companyStart + i]))
 
   // max internship per student is 1 ofc
   for (const student of students) {
@@ -88,13 +73,7 @@ export function matchInternships(
       // to prioritize students that like the company 5-5 is a cost of 0
       const cost = 5 - rating
 
-      const edge = addEdge(
-        graph,
-        studentIndex.get(student)!,
-        companyIndex.get(company)!,
-        1,
-        cost
-      )
+      const edge = addEdge(graph, studentIndex.get(student)!, companyIndex.get(company)!, 1, cost)
 
       assignmentEdges.push({ student, company, rating, edge })
     }
@@ -102,10 +81,7 @@ export function matchInternships(
 
   // make sure the companies arent highering too many students
   for (const company of companies) {
-    const capacity = Math.max(
-      0,
-      Math.floor(companyCapacities.get(company) ?? 0)
-    )
+    const capacity = Math.max(0, Math.floor(companyCapacities.get(company) ?? 0))
 
     addEdge(graph, companyIndex.get(company)!, sink, capacity, 0)
   }
@@ -166,18 +142,11 @@ export function matchInternships(
       rating
     }))
 
-  const matchedStudents = new Set(
-    assignments.map((assignment) => assignment.student)
-  )
+  const matchedStudents = new Set(assignments.map((assignment) => assignment.student))
 
   return {
     assignments,
-    unmatchedStudents: students.filter(
-      (student) => !matchedStudents.has(student)
-    ),
-    totalRating: assignments.reduce(
-      (total, assignment) => total + assignment.rating,
-      0
-    )
+    unmatchedStudents: students.filter((student) => !matchedStudents.has(student)),
+    totalRating: assignments.reduce((total, assignment) => total + assignment.rating, 0)
   }
 }

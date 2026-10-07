@@ -1,8 +1,8 @@
 name: Build
 
-# Branch pushes run only the fast checks; pull requests run only the platform
-# builds, so a push to a branch with an open PR doesn't run any job twice.
-# Pushes to main run everything and publish a release.
+# Branch pushes automatically commit formatting fixes before verification.
+# Pull requests and manual runs verify formatting and run the platform builds.
+# Pushes to main only verify formatting, run everything, and publish a release.
 on:
   push:
   pull_request:
@@ -16,11 +16,58 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  format:
+    name: Autoformat branch
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      changed: ${{ steps.format.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Format and commit fixes
+        id: format
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          npm run format
+          git add -u
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "style: apply Prettier formatting"
+          # A normal push rejects an update if the branch advanced while formatting.
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Verify the formatted commit
+        if: steps.format.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        # GITHUB_TOKEN pushes do not trigger push workflows, so dispatch explicitly.
+        run: gh workflow run build.yml --ref "$BRANCH"
+
   checks:
     name: Lint, typecheck, unit tests
-    if: github.event_name != 'pull_request'
+    needs: format
+    if: ${{ !cancelled() && (needs.format.result == 'success' || needs.format.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
+      - name: Require verification of the formatted commit
+        if: needs.format.outputs.changed == 'true'
+        run: |
+          echo "::error::Formatting fixes were pushed to this branch. The new Build run verifies that commit."
+          exit 1
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:

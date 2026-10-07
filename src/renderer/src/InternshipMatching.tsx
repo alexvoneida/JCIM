@@ -2,35 +2,18 @@ import { useState } from 'react'
 import { matchInternships } from './matching'
 import type { MatchingInput, Rating } from './matching-types'
 
-
 const input: MatchingInput = {
   companyLikes: new Map([
-    ["Mike's Hardware", [
-      'John Smith',
-      'Jane Doe',
-      'Ernest Jones iv',
-      'Leonard Williams',
-      'Devon Witherspoon'
-    ]],
+    [
+      "Mike's Hardware",
+      ['John Smith', 'Jane Doe', 'Ernest Jones iv', 'Leonard Williams', 'Devon Witherspoon']
+    ],
 
-    ['Target', [
-      'John Smith',
-      'Michael Wilson',
-      'Sarah Miller'
-    ]],
+    ['Target', ['John Smith', 'Michael Wilson', 'Sarah Miller']],
 
-    ['Auto Shop', [
-      'Jane Doe',
-      'Ernest Jones iv',
-      'David Anderson'
-    ]],
+    ['Auto Shop', ['Jane Doe', 'Ernest Jones iv', 'David Anderson']],
 
-    ['Best Buy', [
-      'Leonard Williams',
-      'Devon Witherspoon',
-      'Michael Wilson',
-      'Sarah Miller'
-    ]]
+    ['Best Buy', ['Leonard Williams', 'Devon Witherspoon', 'Michael Wilson', 'Sarah Miller']]
   ]),
 
   studentRatings: new Map<string, Map<string, Rating>>([
@@ -90,12 +73,7 @@ const input: MatchingInput = {
       ])
     ],
 
-    [
-      'David Anderson',
-      new Map([
-        ['Auto Shop', 4]
-      ])
-    ]
+    ['David Anderson', new Map([['Auto Shop', 4]])]
   ]),
 
   companyCapacities: new Map([
@@ -106,15 +84,10 @@ const input: MatchingInput = {
   ])
 }
 
-
-
-
 export default function InternshipMatching() {
   const [showMatches, setShowMatches] = useState(false)
 
-  const result = showMatches
-    ? matchInternships(input)
-    : null
+  const result = showMatches ? matchInternships(input) : null
 
   return (
     <main>
@@ -126,9 +99,7 @@ export default function InternshipMatching() {
             <h2>{company}</h2>
 
             {students.map((student) => {
-              const rating = input.studentRatings
-                .get(student)
-                ?.get(company)
+              const rating = input.studentRatings.get(student)?.get(company)
 
               return (
                 <div className="student" key={student}>
@@ -141,48 +112,46 @@ export default function InternshipMatching() {
         ))}
       </div>
 
-      <button onClick={() => setShowMatches(true)}>
-        Generate Matches
-      </button>
+      <button onClick={() => setShowMatches(true)}>Generate Matches</button>
 
       {result && (
-  <section className="matches">
-    <h2>Matched Students</h2>
+        <section className="matches">
+          <h2>Matched Students</h2>
 
-    {Array.from(input.companyCapacities.keys()).map((company) => {
-      const companyMatches = result.assignments.filter(
-        (assignment) => assignment.company === company
-      )
+          {Array.from(input.companyCapacities.keys()).map((company) => {
+            const companyMatches = result.assignments.filter(
+              (assignment) => assignment.company === company
+            )
 
-      return (
-        <div className="company-matches" key={company}>
-          <h3>{company}</h3>
+            return (
+              <div className="company-matches" key={company}>
+                <h3>{company}</h3>
 
-          {companyMatches.length === 0 ? (
-            <p>No students matched</p>
-          ) : (
-            companyMatches.map((assignment) => (
-              <div className="match" key={assignment.student}>
-                <span>{assignment.student}</span>
-                <span>{assignment.rating}/5</span>
+                {companyMatches.length === 0 ? (
+                  <p>No students matched</p>
+                ) : (
+                  companyMatches.map((assignment) => (
+                    <div className="match" key={assignment.student}>
+                      <span>{assignment.student}</span>
+                      <span>{assignment.rating}/5</span>
+                    </div>
+                  ))
+                )}
               </div>
-            ))
+            )
+          })}
+
+          {result.unmatchedStudents.length > 0 && (
+            <>
+              <h3>Unmatched Students</h3>
+
+              {result.unmatchedStudents.map((student) => (
+                <p key={student}>{student}</p>
+              ))}
+            </>
           )}
-        </div>
-      )
-    })}
-
-    {result.unmatchedStudents.length > 0 && (
-      <>
-        <h3>Unmatched Students</h3>
-
-        {result.unmatchedStudents.map((student) => (
-          <p key={student}>{student}</p>
-        ))}
-      </>
-    )}
-  </section>
-)}
+        </section>
+      )}
     </main>
   )
 }
