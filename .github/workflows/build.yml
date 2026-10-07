@@ -1,11 +1,11 @@
 name: Build
 
-# Branch pushes automatically commit formatting fixes before verification.
-# Pull requests and manual runs verify formatting and run the platform builds.
-# Pushes to main only verify formatting, run everything, and publish a release.
+# Branch pushes automatically commit formatting fixes, then run the fast checks.
+# There is no pull_request trigger: PRs show the status of their head commit's
+# push run, so a second trigger would only run the same checks twice.
+# Platform packaging runs only on main, and pushes to main publish a release.
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -81,7 +81,7 @@ jobs:
 
   windows-linux:
     name: Windows + Linux (Docker)
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -153,7 +153,7 @@ jobs:
 
   macos:
     name: macOS
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
