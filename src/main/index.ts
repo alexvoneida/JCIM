@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { IpcChannel } from '../shared/api'
+import { parseSheet, exportSheet } from './excel'
 
 // Must match `appId` in electron-builder.yml, otherwise Windows won't group the
 // running window with its pinned taskbar / Start Menu shortcut.
@@ -58,6 +59,10 @@ if (!app.requestSingleInstanceLock()) {
       if (process.platform === 'win32') app.setAppUserModelId(appId)
 
       ipcMain.handle(IpcChannel.getAppVersion, () => app.getVersion())
+
+      ipcMain.handle(IpcChannel.parseSheet, parseSheet)
+
+      ipcMain.handle(IpcChannel.exportSheet, exportSheet)
 
       createWindow()
 
