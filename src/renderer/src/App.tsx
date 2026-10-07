@@ -16,7 +16,7 @@ export default function App() {
   }, [])
 
   if (page === 'matching') {
-    return <InternshipMatching />
+    return <InternshipMatching onBack={() => setPage('home')} />
   }
 
   async function parseSheet() {

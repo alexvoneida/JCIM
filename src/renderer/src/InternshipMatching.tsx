@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { matchInternships } from './matching'
+import { explainAlternative } from './placement-explanation'
 import type { MatchingInput, Rating } from './matching-types'
 
 const input: MatchingInput = {
@@ -84,13 +85,14 @@ const input: MatchingInput = {
   ])
 }
 
-export default function InternshipMatching() {
+export default function InternshipMatching({ onBack }: { onBack: () => void }) {
   const [showMatches, setShowMatches] = useState(false)
 
   const result = showMatches ? matchInternships(input) : null
 
   return (
     <main>
+      <button onClick={onBack}>← Back</button>
       <h1>Internship Matching</h1>
 
       <div className="company-columns">
@@ -117,6 +119,16 @@ export default function InternshipMatching() {
       {result && (
         <section className="matches">
           <h2>Matched Students</h2>
+          <details className="matching-rules">
+            <summary>How placements are decided</summary>
+            <p>
+              Students must rate an employer and be approved by that employer. Each student gets at
+              most one placement, within employer capacity. Matching first places as many students
+              as possible, then maximizes the total student preference rating (1–5, higher is
+              better). Employer list order is not a ranking. Input order breaks ties between equally
+              optimal allocations.
+            </p>
+          </details>
 
           {Array.from(input.companyCapacities.keys()).map((company) => {
             const companyMatches = result.assignments.filter(
@@ -134,6 +146,30 @@ export default function InternshipMatching() {
                     <div className="match" key={assignment.student}>
                       <span>{assignment.student}</span>
                       <span>{assignment.rating}/5</span>
+                      <details className="placement-explanation">
+                        <summary>Why?</summary>
+                        <div className="explanation-content">
+                          <p>
+                            {assignment.student} rated {company} {assignment.rating}/5, and the
+                            employer approved this student. This placement is within the employer’s{' '}
+                            {input.companyCapacities.get(company)} available places.
+                          </p>
+                          <p>
+                            This allocation places {result.assignments.length} students with a total
+                            preference score of {result.totalRating}.
+                          </p>
+                          {Array.from(input.studentRatings.get(assignment.student) ?? [])
+                            .filter(([alternative]) => alternative !== company)
+                            .map(([alternative, rating]) => (
+                              <p key={alternative}>
+                                <strong>
+                                  {alternative} ({rating}/5):
+                                </strong>{' '}
+                                {explainAlternative(input, result, assignment.student, alternative)}
+                              </p>
+                            ))}
+                        </div>
+                      </details>
                     </div>
                   ))
                 )}
@@ -146,7 +182,28 @@ export default function InternshipMatching() {
               <h3>Unmatched Students</h3>
 
               {result.unmatchedStudents.map((student) => (
-                <p key={student}>{student}</p>
+                <div className="match" key={student}>
+                  <span>{student}</span>
+                  <details className="placement-explanation">
+                    <summary>Why?</summary>
+                    <div className="explanation-content">
+                      <p>No place was allocated to this student in the best overall allocation.</p>
+                      {Array.from(input.studentRatings.get(student) ?? []).length === 0 && (
+                        <p>No student preferences have been provided.</p>
+                      )}
+                      {Array.from(input.studentRatings.get(student) ?? []).map(
+                        ([company, rating]) => (
+                          <p key={company}>
+                            <strong>
+                              {company} ({rating}/5):
+                            </strong>{' '}
+                            {explainAlternative(input, result, student, company)}
+                          </p>
+                        )
+                      )}
+                    </div>
+                  </details>
+                </div>
               ))}
             </>
           )}

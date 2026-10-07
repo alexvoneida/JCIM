@@ -64,3 +64,55 @@ button {
   gap: 12px;
   padding: 10px;
 }
+
+/* Keep the original layout and system colors; add only disclosure styling. */
+summary {
+  cursor: pointer;
+}
+
+.match {
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.placement-explanation {
+  font-size: 14px;
+}
+
+.placement-explanation summary {
+  width: fit-content;
+}
+
+.placement-explanation[open] {
+  flex-basis: 100%;
+}
+
+.explanation-content {
+  max-width: 640px;
+  padding: 0 12px;
+  border-left: 1px solid #ccc;
+  line-height: 1.5;
+}
+
+.matching-rules {
+  max-width: 640px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+@media (max-width: 700px) {
+  .company-columns {
+    flex-wrap: wrap;
+  }
+
+  .company-column {
+    flex-basis: 220px;
+  }
+}
