@@ -173,7 +173,8 @@ jobs:
 
   release:
     name: Publish release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # The implicit success() check treats the skipped format job as a failed ancestor.
+    if: ${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     needs: [checks, windows-linux, windows-install, macos]
     runs-on: ubuntu-latest
     permissions:
