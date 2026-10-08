@@ -23,13 +23,13 @@ test.afterAll(async () => {
   await app?.close()
 })
 
-test('opens a window showing the hello world page', async () => {
+test('opens a window showing the landing page', async () => {
   await expect(page).toHaveTitle('JCIM')
-  await expect(page.getByRole('heading', { name: 'Hello from JCIM' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Jefferson County' })).toBeVisible()
 })
 
 test('returns the app version over IPC', async () => {
-  await expect(page.getByText(version, { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => window.api.getAppVersion())).toBe(version)
 })
 
 test('runs the renderer in an OS-level sandbox', async () => {

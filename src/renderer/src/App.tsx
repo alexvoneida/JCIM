@@ -1,19 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import InternshipMatching from './InternshipMatching'
 import type { Student } from '../../shared/student'
 
 export default function App() {
-  const [appVersion, setAppVersion] = useState('…')
   const [students, setStudents] = useState<Record<string, Student>>({})
-  const { electron } = window.api.versions
   const [page, setPage] = useState('home')
-
-  useEffect(() => {
-    window.api
-      .getAppVersion()
-      .then(setAppVersion)
-      .catch(() => setAppVersion('unknown'))
-  }, [])
 
   if (page === 'matching') {
     return <InternshipMatching onBack={() => setPage('home')} />
@@ -40,14 +31,7 @@ export default function App() {
 
   return (
     <main>
-      <h1>Hello from JCIM</h1>
-      <p>The desktop app is running.</p>
-      <dl>
-        <dt>App</dt>
-        <dd>{appVersion}</dd>
-        <dt>Electron</dt>
-        <dd>{electron}</dd>
-      </dl>
+      <h1 className="home-title">Jefferson County</h1>
       <button onClick={() => setPage('matching')}>Internship Matching</button>
       <button
         onClick={() => {

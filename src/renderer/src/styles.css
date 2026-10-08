@@ -10,19 +10,8 @@ body {
   place-items: center;
 }
 
-dl {
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 0.25rem 1rem;
-}
-
-dt {
-  font-weight: 600;
-}
-
-dd {
-  margin: 0;
-  font-family: ui-monospace, monospace;
+.home-title {
+  text-align: center;
 }
 
 .company-columns {

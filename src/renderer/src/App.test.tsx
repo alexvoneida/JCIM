@@ -14,25 +14,9 @@ beforeEach(() => {
   }
 })
 
-it('greets the user', () => {
+it('shows the county heading', () => {
   render(<App />)
-  expect(screen.getByRole('heading', { name: 'Hello from JCIM' })).toBeInTheDocument()
-})
-
-it('shows the Electron version from the preload bridge', () => {
-  render(<App />)
-  expect(screen.getByText('1.0.0')).toBeInTheDocument()
-})
-
-it('shows the app version fetched over IPC', async () => {
-  render(<App />)
-  expect(await screen.findByText('9.9.9')).toBeInTheDocument()
-})
-
-it('falls back when the app version request fails', async () => {
-  window.api.getAppVersion = vi.fn().mockRejectedValue(new Error('IPC unavailable'))
-  render(<App />)
-  expect(await screen.findByText('unknown')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Jefferson County' })).toBeInTheDocument()
 })
 
 it('keeps the original matching flow and explains placements on demand', () => {
@@ -51,5 +35,5 @@ it('keeps the original matching flow and explains placements on demand', () => {
     within(john as HTMLElement).getByText(/lower the group's total preference score/)
   ).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '← Back' }))
-  expect(screen.getByRole('heading', { name: 'Hello from JCIM' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Jefferson County' })).toBeInTheDocument()
 })
