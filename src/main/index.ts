@@ -9,6 +9,11 @@ const appId = 'com.jcim.desktop'
 
 let mainWindow: BrowserWindow | null = null
 
+// Keep end-to-end runs separate from the coordinator's saved workspace.
+if (process.env['JCIM_TEST_USER_DATA_DIR']) {
+  app.setPath('userData', process.env['JCIM_TEST_USER_DATA_DIR'])
+}
+
 function exitWithError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
   dialog.showErrorBox('JCIM could not start', message)
@@ -17,9 +22,13 @@ function exitWithError(error: unknown): void {
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1024,
-    height: 720,
+    width: 1440,
+    height: 940,
+    minWidth: 900,
+    minHeight: 640,
     show: false,
+    focusable: process.env['JCIM_TEST_NONINTERACTIVE'] !== '1',
+    skipTaskbar: process.env['JCIM_TEST_NONINTERACTIVE'] === '1',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -28,7 +37,12 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.once('ready-to-show', () => {
+    if (process.env['JCIM_TEST_NONINTERACTIVE'] === '1') {
+      mainWindow?.setIgnoreMouseEvents(true)
+      mainWindow?.showInactive()
+    } else mainWindow?.show()
+  })
   mainWindow.on('closed', () => (mainWindow = null))
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
