@@ -6,12 +6,14 @@ export default function IndustryPicker({
   bank,
   initial,
   name,
-  multiple = false
+  multiple = false,
+  onRemove
 }: {
   bank: string[]
   initial: string[]
   name: string
   multiple?: boolean
+  onRemove?: (industry: string) => void
 }) {
   const [selected, setSelected] = useState(initial)
   const label = multiple ? 'Industries of interest' : 'Industry'
@@ -28,16 +30,28 @@ export default function IndustryPicker({
           <p className="field-help">Choose all that apply.</p>
           <div className="industry-options">
             {[...bank, OTHER_INDUSTRY].map((value) => (
-              <label key={value}>
-                <input
-                  type="checkbox"
-                  name={name}
-                  value={value}
-                  checked={selected.includes(value)}
-                  onChange={() => toggle(value)}
-                />
-                {value === OTHER_INDUSTRY ? 'Other — add an industry' : value}
-              </label>
+              <div className="industry-option" key={value}>
+                <label>
+                  <input
+                    type="checkbox"
+                    name={name}
+                    value={value}
+                    checked={selected.includes(value)}
+                    onChange={() => toggle(value)}
+                  />
+                  {value === OTHER_INDUSTRY ? 'Other — add an industry' : value}
+                </label>
+                {onRemove && value !== OTHER_INDUSTRY && (
+                  <button
+                    type="button"
+                    className="icon-button remove-industry"
+                    aria-label={`Remove ${value} from all industries`}
+                    onClick={() => onRemove(value)}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         </fieldset>
@@ -66,10 +80,6 @@ export default function IndustryPicker({
           <input name={`${name}-other`} placeholder="e.g. Renewable energy" />
         </label>
       )}
-      <p className="field-help">
-        Students and employers share these options. New industries become available to both when
-        saved.
-      </p>
     </div>
   )
 }

@@ -18,9 +18,9 @@ import { explainAlternative } from './placement-explanation'
 
 type Page = 'overview' | 'schedule' | 'matching' | 'employers'
 type Notice = {
-  kind: 'success' | 'error' | 'info'
+  kind: 'error' | 'warning'
   title: string
-  detail: string
+  detail?: string
   fix?: string
   warnings?: string[]
 }
@@ -33,11 +33,9 @@ type IconName =
   | 'export'
   | 'search'
   | 'plus'
-  | 'arrow'
   | 'check'
   | 'file'
   | 'close'
-  | 'clock'
 const storageKey = 'jcim-workspace-v1'
 
 function Icon({ name }: { name: IconName }) {
@@ -84,20 +82,13 @@ function Icon({ name }: { name: IconName }) {
       </>
     ),
     plus: <path d="M12 5v14M5 12h14" />,
-    arrow: <path d="M7 17 17 7M7 7h10v10" />,
     check: <path d="m5 12 4 4L19 6" />,
     file: (
       <>
         <path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8M8 16h8" />
       </>
     ),
-    close: <path d="m6 6 12 12M6 18 18 6" />,
-    clock: (
-      <>
-        <circle cx="12" cy="12" r="9" />
-        <path d="M12 7v5l3 2" />
-      </>
-    )
+    close: <path d="m6 6 12 12M6 18 18 6" />
   }
   return (
     <svg
@@ -112,13 +103,6 @@ function Icon({ name }: { name: IconName }) {
       {paths[name]}
     </svg>
   )
-}
-
-function interestTone(interest: string) {
-  if (/finance|business|marketing/i.test(interest)) return 2
-  if (/aerospace|art|design/i.test(interest)) return 3
-  if (/manufactur|construction|hospitality/i.test(interest)) return 1
-  return 0
 }
 
 function formValue(form: FormData, key: string): string {
@@ -167,24 +151,12 @@ function industrySelection(
   }
 }
 
-function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase()
-}
-function Avatar({ name, square = false }: { name: string; square?: boolean }) {
-  return <span className={`avatar ${square ? 'square' : ''}`}>{initials(name)}</span>
+function countLabel(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 function Empty({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="empty">
-      <span className="empty-icon">
-        <Icon name="file" />
-      </span>
       <h2>{title}</h2>
       {children}
     </div>
@@ -281,7 +253,7 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
           p.rating <= 5
       )
     )
-      throw new Error('The saved workspace has an unsupported or damaged format.')
+      throw new Error('The saved data is damaged or in an unsupported format.')
     return {
       workspace: rememberIndustries({ ...value, scheduleSettings: scheduleSettings(value) }),
       notice: null
@@ -291,9 +263,9 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
       workspace: emptyWorkspace(),
       notice: {
         kind: 'error',
-        title: 'The saved workspace could not be opened',
+        title: 'Saved data could not be opened',
         detail: error instanceof Error ? error.message : String(error),
-        fix: 'Import your latest exported workbook to restore your data.'
+        fix: 'Import your latest exported workbook to restore it.'
       }
     }
   }
@@ -304,7 +276,6 @@ export default function App() {
   const [data, setData] = useState(initial.workspace)
   const [notice, setNotice] = useState<Notice | null>(initial.notice)
   const [page, setPage] = useState<Page>('overview')
-  const [savedLocally, setSavedLocally] = useState(!initial.notice)
   const [busy, setBusy] = useState<'import' | 'export' | null>(null)
   const [query, setQuery] = useState('')
   const [interest, setInterest] = useState('')
@@ -316,6 +287,7 @@ export default function App() {
   const [editMatching, setEditMatching] = useState(false)
   const [confirmRegenerate, setConfirmRegenerate] = useState(false)
   const [formError, setFormError] = useState('')
+  const [industryToRemove, setIndustryToRemove] = useState<string | null>(null)
   const students = Object.values(data.students)
   const industries = industryBank(data)
   const active = data.employers.filter((e) => e.active)
@@ -340,20 +312,18 @@ export default function App() {
     setData(next)
     try {
       localStorage.setItem(storageKey, JSON.stringify(next))
-      setSavedLocally(true)
       return true
     } catch (error) {
-      setSavedLocally(false)
       setNotice({
         kind: 'error',
-        title: 'Changes could not be saved on this computer',
+        title: 'Changes could not be saved',
         detail: error instanceof Error ? error.message : String(error),
-        fix: 'Your changes are still open. Export a workbook now to keep them before closing the app.'
+        fix: 'Export a workbook before closing the app to keep your changes.'
       })
       return false
     }
   }
-  function showError(error: SheetError) {
+  function showError(error: SheetError | Omit<Notice, 'kind'>) {
     setNotice({ kind: 'error', ...error })
   }
   function changePage(next: Page) {
@@ -371,20 +341,20 @@ export default function App() {
       const response = await window.api.parseSheet()
       if (response.status === 'error') showError(response.error)
       if (response.status === 'success') {
-        setNotice({
-          kind: 'success',
-          title: 'Workbook imported',
-          detail: `${Object.keys(response.data.students).length} students and ${response.data.employers.length} employers loaded from ${response.data.sourceName ?? 'your workbook'}.`,
-          warnings: response.warnings
-        })
+        if (response.warnings.length)
+          setNotice({
+            kind: 'warning',
+            title: `Imported with ${response.warnings.length} note${response.warnings.length === 1 ? '' : 's'}`,
+            warnings: response.warnings
+          })
         commit(response.data)
         changePage('overview')
       }
     } catch (error) {
       showError({
-        title: 'Import could not start',
-        detail: `The app could not read the workbook. ${error instanceof Error ? error.message : String(error)}`,
-        fix: 'Reopen JCIM and try importing an .xlsx workbook again. Your current workspace is unchanged.'
+        title: 'Import failed',
+        detail: error instanceof Error ? error.message : String(error),
+        fix: 'Restart the app and try again. Your current data is unchanged.'
       })
     } finally {
       setBusy(null)
@@ -396,18 +366,11 @@ export default function App() {
     try {
       const response = await window.api.exportSheet(data)
       if (response.status === 'error') showError(response.error)
-      if (response.status === 'success')
-        setNotice({
-          kind: 'success',
-          title: 'Workbook exported',
-          detail: `Saved to ${response.data.path}. Includes all students, active and inactive employers, feedback, schedule, and final matches.`,
-          warnings: response.warnings
-        })
     } catch (error) {
       showError({
-        title: 'Export could not finish',
-        detail: `The workbook could not be saved. ${error instanceof Error ? error.message : String(error)}`,
-        fix: 'Close the destination file in Excel, choose a writable folder, and try again. Your workspace is still open.'
+        title: 'Export failed',
+        detail: error instanceof Error ? error.message : String(error),
+        fix: 'Close the file in Excel if it is open, choose a folder you can write to, and try again.'
       })
     } finally {
       setBusy(null)
@@ -418,11 +381,6 @@ export default function App() {
     else void importSheet()
   }
   function toggleEmployer(employer: Employer) {
-    setNotice({
-      kind: 'info',
-      title: `${employer.name} is now ${employer.active ? 'inactive' : 'active'}`,
-      detail: `${employer.active ? 'Its interviews were removed from the timetable. The employer and all feedback remain in your workbook; other interviews and their edits were kept.' : 'Available for interviews and matching again. Add interviews or generate a new schedule to include it.'} Generate matching again to use the updated employer list.`
-    })
     commit({
       ...data,
       employers: data.employers.map((e) =>
@@ -453,15 +411,11 @@ export default function App() {
           (employerForm === 'new' || e.name !== employerForm?.name)
       )
     ) {
-      setFormError(
-        `“${name}” already exists. Find the employer in the list and turn it on again if it is inactive.`
-      )
+      setFormError(`An employer named “${name}” already exists.`)
       return
     }
     if (!capacityValue || !Number.isSafeInteger(capacity) || capacity < 0) {
-      setFormError(
-        'Internship places must be a whole number of 0 or more. Enter 0 if capacity has not been confirmed.'
-      )
+      setFormError('Capacity must be a whole number of 0 or more.')
       return
     }
     const selectedIndustry = industrySelection(form, 'industry', industries)
@@ -476,7 +430,7 @@ export default function App() {
       active: employerForm === 'new' ? true : employerForm!.active,
       scheduling: employerForm === 'new' ? undefined : employerForm!.scheduling
     }
-    const saved = commit({
+    commit({
       ...data,
       employers:
         employerForm === 'new'
@@ -486,12 +440,6 @@ export default function App() {
       matchingApproved: false
     })
     setEmployerForm(null)
-    if (saved)
-      setNotice({
-        kind: 'success',
-        title: `Employer ${employerForm === 'new' ? 'added' : 'updated'}`,
-        detail: `${name} has ${capacity} internship places. Generate matching again to use this capacity.`
-      })
   }
   function saveStudentIndustries(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -502,15 +450,28 @@ export default function App() {
       return
     }
     const student = { ...data.students[studentDetail.name], interests: selected.values } as Student
-    const saved = commit({ ...data, students: { ...data.students, [student.name]: student } })
+    commit({ ...data, students: { ...data.students, [student.name]: student } })
     setStudentDetail(student)
     setFormError('')
-    if (saved)
-      setNotice({
-        kind: 'success',
-        title: 'Student industries updated',
-        detail: `${student.name} now uses the shared industry options.`
-      })
+  }
+  function removeIndustry(industry: string) {
+    const other = (value: string) =>
+      industryName(value).toLowerCase() !== industryName(industry).toLowerCase()
+    const students = Object.fromEntries(
+      Object.entries(data.students).map(([name, student]) => [
+        name,
+        { ...student, interests: student.interests?.filter(other) } as Student
+      ])
+    )
+    commit({
+      ...data,
+      industries: data.industries?.filter(other),
+      employers: data.employers.map((e) => (other(e.industry) ? e : { ...e, industry: '' })),
+      students
+    })
+    if (studentDetail) setStudentDetail(students[studentDetail.name])
+    if (!other(interest)) setInterest('')
+    setIndustryToRemove(null)
   }
 
   function schedule() {
@@ -526,46 +487,38 @@ export default function App() {
       const interviews = generateSchedule(data)
       if (!interviews.length) {
         showError({
-          title: 'No interviews to schedule',
-          detail: 'There are no student interviews linked to active employers.',
-          fix: 'Import a tracker with interview rows, turn employers on, or use Edit schedule → Add interview.'
+          title: 'Nothing to schedule',
+          detail: 'No interviews are linked to active employers.',
+          fix: 'Activate employers on the Employers page, or add interviews with Edit schedule.'
         })
         return
       }
-      const saved = commit({ ...data, schedule: interviews, scheduleApproved: false })
-      if (saved)
-        setNotice({
-          kind: 'success',
-          title: 'Schedule generated',
-          detail: `${interviews.length} interviews scheduled using the configured hours, interview lengths, and employer limits, with no student overlaps. Set the interview date and review before approving.`
-        })
+      commit({ ...data, schedule: interviews, scheduleApproved: false })
     } catch (error) {
       showError({
         title: 'Schedule could not be generated',
         detail: error instanceof Error ? error.message : String(error),
-        fix: 'Edit the overall schedule window or use the employer’s edit icon to adjust hours, interview length, or Students at once. Your existing schedule is unchanged.'
+        fix: 'Adjust the schedule window or employer interview settings and try again.'
       })
     }
   }
   function generateMatches() {
     if (!active.some((e) => e.capacity > 0)) {
       showError({
-        title: 'Matching needs internship capacity',
-        detail: 'No active employer has internship places available.',
-        fix: 'On Employers, turn on the participating employers and enter their confirmed internship places.'
+        title: 'No capacity available',
+        detail: 'No active employer has capacity set.',
+        fix: 'Set capacity on the Employers page.'
       })
       return
     }
     const matched = matchInternships(input)
     const saved = commit({ ...data, placements: matched.assignments, matchingApproved: false })
-    if (saved)
+    if (saved && !matched.assignments.length)
       setNotice({
-        kind: matched.assignments.length ? 'success' : 'info',
-        title: matched.assignments.length ? 'Matching generated' : 'No eligible placements found',
-        detail: `${matched.assignments.length} students matched; ${matched.unmatchedStudents.length} remain unmatched. A placement requires employer approval, a student preference from 1–5, and available employer capacity. A student who declined an employer cannot be placed there.`,
-        fix: matched.assignments.length
-          ? undefined
-          : 'Use Edit matching to review the feedback, and check capacity on Employers.'
+        kind: 'warning',
+        title: 'No students could be matched',
+        detail:
+          'A match needs employer approval, a student rating, and open capacity at the employer.'
       })
   }
   function updateFeedback(student: string, index: number, patch: Partial<InterviewResult>) {
@@ -594,9 +547,8 @@ export default function App() {
     const rating = input.studentRatings.get(student)?.get(employer)
     if (!rating || !input.companyLikes.get(employer)?.includes(student)) {
       showError({
-        title: 'This placement is not eligible',
-        detail: `${student} does not have approved, rated feedback for ${employer}.`,
-        fix: 'Record employer approval and a student rating, and check that the student has not declined.'
+        title: 'Placement not eligible',
+        detail: `${student} needs employer approval and a rating for ${employer}, and must not have declined.`
       })
       return
     }
@@ -605,9 +557,8 @@ export default function App() {
       (input.companyCapacities.get(employer) ?? 0)
     ) {
       showError({
-        title: 'This employer has no places left',
-        detail: `${employer} has reached its internship capacity.`,
-        fix: 'Choose another employer or correct its confirmed capacity on Employers.'
+        title: 'Employer is full',
+        detail: `${employer} has reached its capacity.`
       })
       return
     }
@@ -617,18 +568,13 @@ export default function App() {
       matchingApproved: false
     })
   }
-  const titles: Record<Page, [string, string]> = {
-    overview: ['Student Overview', 'View students, their interests, and interview feedback.'],
-    schedule: ['Interview Schedule', 'Review and manage the proposed interview schedule.'],
-    matching: ['Final Matching', 'Review employer feedback and create final student matches.'],
-    employers: ['Employers', 'Manage internship places and choose which employers participate.']
-  }
   const nav: [Page, IconName, string][] = [
-    ['overview', 'grid', 'Overview'],
+    ['overview', 'grid', 'Students'],
     ['schedule', 'calendar', 'Interview Schedule'],
-    ['matching', 'link', 'Final Matching'],
+    ['matching', 'link', 'Matching'],
     ['employers', 'building', 'Employers']
   ]
+  const title = nav.find(([id]) => id === page)![2]
   const filteredStudents = students.filter(
     (s) =>
       `${s.name} ${s.school ?? ''}`.toLowerCase().includes(query.toLowerCase()) &&
@@ -641,12 +587,8 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">J</span>
-          <div>
-            <strong>Jeffco Internship</strong>
-            <span>MATCHING PLATFORM</span>
-          </div>
+          <strong>Jeffco Internship Matching</strong>
         </div>
-        <div className="nav-label">WORKSPACE</div>
         <nav aria-label="Workspace pages">
           {nav.map(([id, icon, label]) => (
             <button
@@ -658,30 +600,9 @@ export default function App() {
             >
               <Icon name={icon} />
               {label}
-              {id === 'employers' && (
-                <span className="nav-count" aria-hidden="true">
-                  {data.employers.length}
-                </span>
-              )}
             </button>
           ))}
         </nav>
-        <div className="sidebar-sheet">
-          <Icon name="file" />
-          <strong>Workbook workspace</strong>
-          <p>Import a tracker to get started. Export to share or keep a backup.</p>
-          <span className="local-indicator">
-            <span />
-            {savedLocally ? 'Changes saved on this computer' : 'Export to keep your changes'}
-          </span>
-        </div>
-        <div className="profile">
-          <span className="profile-avatar">JU</span>
-          <div>
-            <strong>Jeffco User</strong>
-            <span>Program Coordinator</span>
-          </div>
-        </div>
       </aside>
       <main className="main-content">
         <div className="workbook-toolbar">
@@ -689,17 +610,15 @@ export default function App() {
             <Icon name="file" />
             <div>
               <strong>{data.sourceName ?? 'No workbook imported'}</strong>
-              <span>
-                {data.importedAt
-                  ? `Imported ${new Date(data.importedAt).toLocaleString()}`
-                  : 'Excel workbooks (.xlsx)'}
-              </span>
+              {data.importedAt && (
+                <span>Imported {new Date(data.importedAt).toLocaleString()}</span>
+              )}
             </div>
           </div>
           <div className="toolbar-actions">
             <button onClick={requestImport} disabled={!!busy}>
               <Icon name="import" />
-              {busy === 'import' ? 'Importing…' : 'Import sheet'}
+              {busy === 'import' ? 'Importing…' : 'Import workbook'}
             </button>
             <button
               className="primary"
@@ -709,7 +628,7 @@ export default function App() {
               disabled={!!busy || (!students.length && !data.employers.length)}
             >
               <Icon name="export" />
-              {busy === 'export' ? 'Exporting…' : 'Export sheet'}
+              {busy === 'export' ? 'Exporting…' : 'Export workbook'}
             </button>
           </div>
         </div>
@@ -720,21 +639,14 @@ export default function App() {
           >
             <div>
               <strong>{notice.title}</strong>
-              <p>{notice.detail}</p>
-              {notice.fix && (
-                <p>
-                  <b>How to fix it:</b> {notice.fix}
-                </p>
-              )}
+              {notice.detail && <p>{notice.detail}</p>}
+              {notice.fix && <p>{notice.fix}</p>}
               {!!notice.warnings?.length && (
-                <details>
-                  <summary>{notice.warnings.length} import notes — review before matching</summary>
-                  <ul>
-                    {notice.warnings.map((w, i) => (
-                      <li key={i}>{w}</li>
-                    ))}
-                  </ul>
-                </details>
+                <ul>
+                  {notice.warnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
               )}
             </div>
             <button
@@ -747,10 +659,7 @@ export default function App() {
           </section>
         )}
         <header className="page-header">
-          <div>
-            <h1>{titles[page][0]}</h1>
-            <p>{titles[page][1]}</p>
-          </div>
+          <h1>{title}</h1>
           <div className="page-actions">
             {page === 'employers' && (
               <button
@@ -782,17 +691,15 @@ export default function App() {
                     if (!data.interviewDate) {
                       showError({
                         title: 'Choose an interview date first',
-                        detail: 'The schedule has times but no calendar date.',
-                        fix: 'Set the interview date above the schedule, then approve it.'
+                        detail: 'Set the interview date above the timetable, then approve.'
                       })
                       return
                     }
                     const issue = scheduleIssues(data)[0]
                     if (issue) {
                       showError({
-                        title: 'Schedule needs corrections before approval',
-                        detail: issue.detail,
-                        fix: 'Resolve the highlighted interviews or edit the schedule settings, then approve again.'
+                        title: 'Fix scheduling issues before approving',
+                        detail: issue.detail
                       })
                       return
                     }
@@ -827,50 +734,39 @@ export default function App() {
         </header>
         {page === 'overview' && (
           <>
-            <div className="section-toolbar">
-              <div>
+            {!!students.length && (
+              <div className="section-toolbar">
                 <strong>{students.length} students</strong>
-                <span className="muted">{feedback.length} interview records</span>
+                <div className="filters">
+                  <label className="search">
+                    <Icon name="search" />
+                    <input
+                      aria-label="Search students"
+                      placeholder="Search students or schools"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                    />
+                  </label>
+                  <select
+                    aria-label="Filter interests"
+                    value={interest}
+                    onChange={(e) => setInterest(e.target.value)}
+                  >
+                    <option value="">All interests</option>
+                    {interests.map((i) => (
+                      <option key={i}>{i}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <div className="filters">
-                <label className="search">
-                  <Icon name="search" />
-                  <input
-                    aria-label="Search students"
-                    placeholder="Search students or schools"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                  />
-                </label>
-                <select
-                  aria-label="Filter interests"
-                  value={interest}
-                  onChange={(e) => setInterest(e.target.value)}
-                >
-                  <option value="">All interests</option>
-                  {interests.map((i) => (
-                    <option key={i}>{i}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+            )}
             {!students.length ? (
-              <Empty title="Start with your workbook">
-                <p>
-                  Import the internship tracker to see your students, employer feedback, and
-                  preferences in one place.
-                </p>
-                <button className="primary" onClick={requestImport}>
-                  <Icon name="import" />
-                  Import Excel sheet
-                </button>
-                <p className="small">
-                  Supports the Student Good Fit + Employer Good Fit tracker and JCIM exports.
-                </p>
+              <Empty title="No students yet">
+                <p>Import the internship tracker or a previous JCIM export (.xlsx).</p>
               </Empty>
             ) : !filteredStudents.length ? (
               <Empty title="No students found">
-                <p>Try another search or select All interests.</p>
+                <p>No students match the current search and filter.</p>
               </Empty>
             ) : (
               <div className="student-grid">
@@ -884,36 +780,30 @@ export default function App() {
                     }}
                   >
                     <div className="card-heading">
-                      <Avatar name={s.name} />
-                      <div>
-                        <h2>{s.name}</h2>
-                        <p>
-                          {[s.grade, s.school].filter(Boolean).join(' · ') || 'School not provided'}
-                        </p>
-                      </div>
-                      <span className="card-arrow">
-                        <Icon name="arrow" />
-                      </span>
+                      <h2>{s.name}</h2>
+                      {[s.grade, s.school].some(Boolean) && (
+                        <p>{[s.grade, s.school].filter(Boolean).join(' · ')}</p>
+                      )}
                     </div>
-                    <div className="eyebrow">AREAS OF INTEREST</div>
                     <div className="tags">
                       {s.interests?.length ? (
                         s.interests.map((i) => (
-                          <span key={i} className={`tag tone-${interestTone(i)}`}>
+                          <span key={i} className="tag">
                             {i}
                           </span>
                         ))
                       ) : (
-                        <span className="muted small">Interests not provided in this sheet</span>
+                        <span className="muted small">No interests listed</span>
                       )}
                     </div>
                     <div className="card-footer">
-                      <span>{s.interviewResults.length} interviews</span>
                       <span>
-                        {data.placements.some((p) => p.student === s.name)
-                          ? 'Matched'
-                          : 'View student'}
+                        {s.interviewResults.length} interview
+                        {s.interviewResults.length === 1 ? '' : 's'}
                       </span>
+                      {data.placements.some((p) => p.student === s.name) && (
+                        <span className="matched">Matched</span>
+                      )}
                     </div>
                   </button>
                 ))}
@@ -923,57 +813,40 @@ export default function App() {
         )}
         {page === 'employers' && (
           <>
-            <Stats
-              values={[
-                ['Employers', data.employers.length],
-                ['Active', active.length],
-                ['Inactive', data.employers.length - active.length],
-                ['Available internship places', active.reduce((n, e) => n + e.capacity, 0)]
-              ]}
-            />
-            <div className="info-strip">
-              <Icon name="building" />
-              <p>
-                <strong>Turn participation on or off.</strong> Inactive employers stay in your sheet
-                with their feedback. They are excluded from interviews and final matching.
-              </p>
-            </div>
-            <div className="section-toolbar">
-              <strong>{data.employers.length} employers</strong>
-              <div className="filters">
-                <label className="search">
-                  <Icon name="search" />
-                  <input
-                    aria-label="Search employers"
-                    placeholder="Search employers"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                  />
-                </label>
-                <select
-                  aria-label="Filter employer status"
-                  value={employerStatus}
-                  onChange={(e) => setEmployerStatus(e.target.value)}
-                >
-                  <option value="all">All employers</option>
-                  <option value="active">Active only</option>
-                  <option value="inactive">Inactive only</option>
-                </select>
+            {!!data.employers.length && (
+              <div className="section-toolbar">
+                <div>
+                  <strong>{data.employers.length} employers</strong>
+                  <span className="muted">
+                    {active.length} active · {active.reduce((n, e) => n + e.capacity, 0)} total
+                    capacity
+                  </span>
+                </div>
+                <div className="filters">
+                  <label className="search">
+                    <Icon name="search" />
+                    <input
+                      aria-label="Search employers"
+                      placeholder="Search employers"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                    />
+                  </label>
+                  <select
+                    aria-label="Filter employer status"
+                    value={employerStatus}
+                    onChange={(e) => setEmployerStatus(e.target.value)}
+                  >
+                    <option value="all">All employers</option>
+                    <option value="active">Active only</option>
+                    <option value="inactive">Inactive only</option>
+                  </select>
+                </div>
               </div>
-            </div>
+            )}
             {!data.employers.length ? (
-              <Empty title="Add your participating employers">
-                <p>Import employers from your tracker or create a new employer here.</p>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setEmployerForm('new')
-                    setFormError('')
-                  }}
-                >
-                  <Icon name="plus" />
-                  New employer
-                </button>
+              <Empty title="No employers yet">
+                <p>Import a workbook or add an employer.</p>
               </Empty>
             ) : (
               <div className="employer-grid">
@@ -989,39 +862,34 @@ export default function App() {
                       key={e.name}
                     >
                       <div className="card-heading">
-                        <Avatar name={e.name} square />
-                        <div>
-                          <h2>{e.name}</h2>
-                          <p>{e.industry || 'Industry not provided'}</p>
-                        </div>
-                        <span className={`badge ${e.active ? 'green' : 'neutral'}`}>
-                          {e.active ? 'Active' : 'Inactive'}
-                        </span>
+                        <h2>{e.name}</h2>
+                        {e.industry && <p>{e.industry}</p>}
                       </div>
                       <div className="employer-numbers">
                         <div>
+                          <span>Capacity</span>
                           <strong>{e.capacity}</strong>
-                          <span>Internship places</span>
                         </div>
                         <div>
+                          <span>Interviews</span>
                           <strong>{feedback.filter((i) => i.business === e.name).length}</strong>
-                          <span>Interview records</span>
                         </div>
                       </div>
                       {e.capacity === 0 && e.active && (
-                        <p className="capacity-note">Set capacity before matching</p>
+                        <p className="capacity-note">No capacity set</p>
                       )}
                       <div className="employer-bottom">
                         <button
+                          aria-label={`Edit ${e.name}`}
                           onClick={() => {
                             setEmployerForm(e)
                             setFormError('')
                           }}
                         >
-                          Edit employer
+                          Edit
                         </button>
                         <label className="switch-label">
-                          <span>{e.active ? 'Turn off' : 'Turn on'}</span>
+                          <span>Active</span>
                           <button
                             className="switch"
                             role="switch"
@@ -1057,60 +925,39 @@ export default function App() {
                     (i) => i.employerAccept === true && active.some((e) => e.name === i.business)
                   ).length
                 ],
-                [
-                  '5-star student ratings',
-                  matchingFeedback.filter(
-                    (i) => i.rank === 5 && active.some((e) => e.name === i.business)
-                  ).length
-                ],
-                ['Final matches', `${data.placements.length} of ${students.length}`]
+                ['Matched students', `${data.placements.length} of ${students.length}`]
               ]}
             />
             <details className="matching-rules">
-              <summary>How placements are decided</summary>
+              <summary>How matching works</summary>
               <p>
-                Each student receives at most one placement with an active employer, within its
-                confirmed capacity. Matching first places as many eligible students as possible,
-                then maximizes total student preference (1–5, higher is better). The employer must
-                approve the student, and the student must not have declined. Employer approval is a
-                yes/no answer; the stars below are student preferences.
+                Each student is placed with at most one active employer, within that employer’s
+                capacity. A placement requires employer approval and a student rating, and the
+                student must not have declined. Matching places as many students as possible, then
+                maximizes the total of student ratings (1–5).
               </p>
             </details>
-            {editMatching && (
-              <div className="info-strip">
-                <Icon name="link" />
-                <p>
-                  Update feedback below, then generate matching again. To adjust a placement
-                  manually, use the student assignments at the bottom. Changes require approval
-                  again.
-                </p>
-              </div>
-            )}
             <section className="board">
               <div className="board-heading">
-                <strong>EMPLOYER FEEDBACK · SORTED BY STUDENT PREFERENCE</strong>
+                <strong>Employer feedback</strong>
                 <span className={`status-dot ${data.matchingApproved ? 'approved' : ''}`}>
                   {data.matchingApproved ? 'Approved' : 'Awaiting approval'}
                 </span>
               </div>
               {!active.length ? (
                 <Empty title="No active employers">
-                  <p>Import a workbook or turn on employers on the Employers page.</p>
-                  <button onClick={() => changePage('employers')}>Manage employers</button>
+                  <p>Import a workbook or activate employers on the Employers page.</p>
                 </Empty>
               ) : (
                 <div className="company-columns">
                   {active.map((e) => (
                     <section className="company-column" key={e.name}>
                       <div className="company-heading">
-                        <Avatar name={e.name} square />
-                        <div>
-                          <h2>{e.name}</h2>
-                          <p>
-                            {data.placements.filter((p) => p.company === e.name).length} /{' '}
-                            {e.capacity} places filled
-                          </p>
-                        </div>
+                        <h2>{e.name}</h2>
+                        <p>
+                          {data.placements.filter((p) => p.company === e.name).length} of{' '}
+                          {e.capacity} filled
+                        </p>
                       </div>
                       {matchingFeedback
                         .filter((i) => i.business === e.name)
@@ -1128,15 +975,14 @@ export default function App() {
                                 <h3>{i.student}</h3>
                                 <span
                                   className="rating"
-                                  aria-label={`Student preference ${preference(i) ?? 'not rated'}`}
+                                  aria-label={`Student rating ${preference(i) ?? 'not rated'}`}
                                 >
-                                  {preference(i) ?? '—'} <span>☆</span>
-                                  <small>/ 5</small>
+                                  {preference(i) ? `${preference(i)}/5` : 'Not rated'}
                                 </span>
                               </div>
                               <div className="feedback-status">
                                 <span
-                                  className={`tag ${i.employerAccept ? 'tone-2' : i.employerAccept === false ? 'tone-1' : 'neutral'}`}
+                                  className={`feedback-state ${i.employerAccept ? 'approved' : i.employerAccept === false ? 'declined' : ''}`}
                                 >
                                   {i.employerAccept
                                     ? 'Employer approved'
@@ -1157,9 +1003,9 @@ export default function App() {
                               {editMatching && (
                                 <div className="feedback-edit">
                                   <label>
-                                    Student preference
+                                    Student rating
                                     <select
-                                      aria-label={`Student preference for ${i.student} at ${e.name}`}
+                                      aria-label={`Student rating for ${i.student} at ${e.name}`}
                                       value={preference(i) ?? ''}
                                       onChange={(event) =>
                                         updateFeedback(i.student, i.index, {
@@ -1232,8 +1078,7 @@ export default function App() {
                                   <summary>Why this placement?</summary>
                                   <p>
                                     {i.student} rated {e.name} {i.rank}/5 and was approved by the
-                                    employer. The placement fits within {e.capacity} internship
-                                    places.
+                                    employer.
                                   </p>
                                   {[...(input.studentRatings.get(i.student) ?? [])]
                                     .filter(([name]) => name !== e.name)
@@ -1255,9 +1100,7 @@ export default function App() {
                           )
                         })}
                       {!matchingFeedback.some((i) => i.business === e.name) && (
-                        <p className="column-empty">
-                          No feedback yet. Add an interview for this employer on Interview Schedule.
-                        </p>
+                        <p className="column-empty">No feedback yet.</p>
                       )}
                     </section>
                   ))}
@@ -1289,8 +1132,8 @@ export default function App() {
                           <summary>Why unmatched?</summary>
                           <p>
                             {!input.studentRatings.get(name)?.size
-                              ? 'No active employer has approved, rated feedback for this student. Review feedback and employer participation.'
-                              : 'This student has no placement in the current matching. Review employer capacity and feedback, or generate matching again.'}
+                              ? 'No active employer has both approved this student and been rated by them.'
+                              : 'Not placed in the current matching.'}
                           </p>
                           {[...(input.studentRatings.get(name) ?? [])].map(([company]) => (
                             <p key={company}>
@@ -1307,20 +1150,15 @@ export default function App() {
             )}
           </>
         )}
-        <footer className="workspace-footer">
-          <span>Jefferson County internship workspace</span>
-          <span>Inactive employers are always included in exports</span>
-        </footer>
       </main>
       {confirmImport && (
-        <Modal title="Import a different workbook" onClose={() => setConfirmImport(false)}>
+        <Modal title="Replace current data?" onClose={() => setConfirmImport(false)}>
           <p>
-            A successful import replaces the current workspace, including employer status, feedback
-            edits, schedules, and placements. Export first if you want to keep a copy.
+            Importing replaces all current students, employers, schedules, and matches. Export first
+            to keep a copy.
           </p>
-          <p>If import fails or you cancel the file picker, your workspace stays unchanged.</p>
           <div className="modal-actions">
-            <button onClick={() => setConfirmImport(false)}>Keep current workspace</button>
+            <button onClick={() => setConfirmImport(false)}>Cancel</button>
             <button
               className="primary"
               onClick={() => {
@@ -1345,7 +1183,6 @@ export default function App() {
                 name="name"
                 defaultValue={employerForm === 'new' ? '' : employerForm.name}
                 readOnly={employerForm !== 'new'}
-                placeholder="e.g. Frontier Aero"
               />
             </label>
             <IndustryPicker
@@ -1356,22 +1193,20 @@ export default function App() {
               name="industry"
             />
             <label>
-              Internship places
+              Capacity
               <input
                 name="capacity"
-                aria-label="Internship places"
+                aria-label="Capacity"
+                aria-describedby="capacity-help"
                 type="number"
                 min="0"
                 step="1"
                 defaultValue={employerForm === 'new' ? '0' : employerForm.capacity}
               />
-              <span className="field-help">
-                Use confirmed capacity. 0 means no places available for matching.
+              <span className="field-help" id="capacity-help">
+                Number of interns this employer can take.
               </span>
             </label>
-            <p className="small muted">
-              Employers are kept in exports even when participation is turned off.
-            </p>
             {formError && (
               <p className="form-error" role="alert">
                 {formError}
@@ -1389,28 +1224,26 @@ export default function App() {
         </Modal>
       )}
       {confirmRegenerate && (
-        <Modal title="Generate a new schedule" onClose={() => setConfirmRegenerate(false)}>
+        <Modal title="Replace the current schedule?" onClose={() => setConfirmRegenerate(false)}>
           <p>
-            This replaces the current interview times and individual duration overrides. Your
-            overall window and employer interview settings are kept.
+            All interview times and per-interview length overrides will be replaced. Schedule and
+            employer settings are kept.
           </p>
           <div className="modal-actions">
-            <button onClick={() => setConfirmRegenerate(false)}>Keep current schedule</button>
+            <button onClick={() => setConfirmRegenerate(false)}>Cancel</button>
             <button className="primary" onClick={generateInterviews}>
-              Generate new schedule
+              Replace schedule
             </button>
           </div>
         </Modal>
       )}
       {studentDetail && (
         <Modal title={studentDetail.name} onClose={() => setStudentDetail(null)}>
-          <div className="student-detail-heading">
-            <Avatar name={studentDetail.name} />
-            <div>
-              <strong>{studentDetail.school || 'School not provided'}</strong>
-              <p>{studentDetail.interests?.join(', ') || 'Interests not provided'}</p>
-            </div>
-          </div>
+          {[studentDetail.grade, studentDetail.school].some(Boolean) && (
+            <p className="student-detail-heading">
+              {[studentDetail.grade, studentDetail.school].filter(Boolean).join(' · ')}
+            </p>
+          )}
           <form className="student-industry-form" onSubmit={saveStudentIndustries} noValidate>
             <IndustryPicker
               key={JSON.stringify(studentDetail.interests ?? [])}
@@ -1418,6 +1251,7 @@ export default function App() {
               initial={studentDetail.interests ?? []}
               name="interests"
               multiple
+              onRemove={setIndustryToRemove}
             />
             {formError && (
               <p className="form-error" role="alert">
@@ -1430,24 +1264,18 @@ export default function App() {
           {studentDetail.interviewResults.length ? (
             studentDetail.interviewResults.map((i, n) => (
               <div className="detail-interview" key={n}>
-                <strong>{i.business}</strong>
-                <span className="tag">
-                  {preference(i) ? `${i.rank} / 5 student preference` : 'Not rated'}
-                </span>
+                <strong>
+                  {i.business}
+                  {!data.employers.find((e) => e.name === i.business)?.active && ' (inactive)'}
+                </strong>
+                <p>{[i.position, `Round ${i.wave}`].filter(Boolean).join(' · ')}</p>
                 <p>
-                  {i.position || 'Position not provided'} · Round {i.wave}
-                </p>
-                <p>
-                  Employer:{' '}
+                  Student rating: {preference(i) ? `${i.rank}/5` : 'Not rated'} · Employer:{' '}
                   {i.employerAccept === undefined
-                    ? 'Feedback pending'
+                    ? 'Pending'
                     : i.employerAccept
                       ? 'Approved'
-                      : 'Declined'}{' '}
-                  · Participation:{' '}
-                  {data.employers.find((e) => e.name === i.business)?.active
-                    ? 'Active'
-                    : 'Inactive'}
+                      : 'Declined'}
                 </p>
               </div>
             ))
@@ -1455,16 +1283,31 @@ export default function App() {
             <p className="muted">No interviews recorded.</p>
           )}
           <div className="modal-actions">
-            <button
-              onClick={() => {
-                setStudentDetail(null)
-                changePage('matching')
-              }}
-            >
-              Review matching
-            </button>
             <button className="primary" onClick={() => setStudentDetail(null)}>
               Done
+            </button>
+          </div>
+        </Modal>
+      )}
+      {industryToRemove && (
+        <Modal title={`Remove “${industryToRemove}”?`} onClose={() => setIndustryToRemove(null)}>
+          <p>
+            This removes the industry from{' '}
+            {countLabel(
+              students.filter((s) => s.interests?.includes(industryToRemove)).length,
+              'student'
+            )}{' '}
+            and{' '}
+            {countLabel(
+              data.employers.filter((e) => e.industry === industryToRemove).length,
+              'employer'
+            )}
+            , and from the list of options.
+          </p>
+          <div className="modal-actions">
+            <button onClick={() => setIndustryToRemove(null)}>Cancel</button>
+            <button className="danger" onClick={() => removeIndustry(industryToRemove)}>
+              Remove industry
             </button>
           </div>
         </Modal>

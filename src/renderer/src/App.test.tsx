@@ -37,18 +37,18 @@ beforeEach(() => {
   }
 })
 async function importData() {
-  fireEvent.click(screen.getByRole('button', { name: 'Import sheet' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
   await screen.findByRole('heading', { name: 'Alice' })
 }
 
 it('shows the redesigned flow and explicit sheet actions', () => {
   render(<App />)
-  expect(screen.getByRole('heading', { name: 'Student Overview' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: 'Start with your workbook' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Students' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'No students yet' })).toBeInTheDocument()
   expect(screen.queryByText(/student workbook/i)).not.toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Export sheet' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Export workbook' })).toBeDisabled()
   const nav = screen.getByRole('navigation', { name: 'Workspace pages' })
-  for (const name of ['Overview', 'Interview Schedule', 'Final Matching', 'Employers'])
+  for (const name of ['Students', 'Interview Schedule', 'Matching', 'Employers'])
     expect(within(nav).getByRole('button', { name })).toBeInTheDocument()
 })
 it('imports real workspace data, shows import notes, and exports the complete workspace', async () => {
@@ -56,8 +56,8 @@ it('imports real workspace data, shows import notes, and exports the complete wo
   await importData()
   expect(screen.getByText('Lakewood High')).toBeInTheDocument()
   expect(screen.getByText('Review capacity')).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Export sheet' }))
-  await screen.findByText('Workbook exported')
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
+  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
   const exported = vi.mocked(window.api.exportSheet).mock.calls[0][0]
   expect(exported.employers).toEqual(fixture().employers)
   expect(exported.students.Alice.name).toBe('Alice')
@@ -65,14 +65,14 @@ it('imports real workspace data, shows import notes, and exports the complete wo
 it('turns employers off, preserves feedback and export rows, and restores the status after reopening', async () => {
   const app = render(<App />)
   await importData()
-  fireEvent.click(screen.getByRole('button', { name: 'Final Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
   expect(screen.getByText('Matched')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Employers' }))
   fireEvent.click(screen.getByRole('switch', { name: 'Participation for Aero' }))
   expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
-  fireEvent.click(screen.getByRole('button', { name: 'Export sheet' }))
-  await screen.findByText('Workbook exported')
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
+  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
   const exported = vi.mocked(window.api.exportSheet).mock.calls[0][0]
   expect(exported.employers).toEqual([{ ...fixture().employers[0], active: false }])
   expect(exported.placements).toEqual([])
@@ -135,8 +135,8 @@ it('edits overall and employer settings, aligns simultaneous students, and persi
   fireEvent.click(screen.getByRole('button', { name: 'Save interview' }))
   expect(screen.getByRole('button', { name: 'Approve schedule' })).toBeEnabled()
   expect(screen.getByText('10 min · override')).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Export sheet' }))
-  await screen.findByText('Workbook exported')
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
+  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
   const saved = vi.mocked(window.api.exportSheet).mock.calls[0][0]
   expect(saved.scheduleSettings).toEqual({ start: '09:00', end: '12:00', durationMinutes: 20 })
   expect(saved.employers[0].scheduling).toEqual({
@@ -165,20 +165,20 @@ it('keeps existing interviews when settings change, blocks conflicting approval,
   fireEvent.change(screen.getByLabelText('Schedule start time'), { target: { value: '10:00' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save schedule settings' }))
   expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument()
-  expect(screen.getByText(/Your interviews were kept/)).toBeInTheDocument()
+  expect(screen.getByText(/^\d+ scheduling issues?$/)).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Approve schedule' }))
   expect(
     screen.getAllByRole('alert').some((a) => a.textContent?.includes('outside this employer'))
   ).toBe(true)
   fireEvent.click(screen.getByRole('button', { name: 'Generate schedule' }))
-  const modal = screen.getByRole('dialog', { name: 'Generate a new schedule' })
-  fireEvent.click(within(modal).getByRole('button', { name: 'Keep current schedule' }))
-  expect(screen.getByText(/Your interviews were kept/)).toBeInTheDocument()
+  const modal = screen.getByRole('dialog', { name: 'Replace the current schedule?' })
+  fireEvent.click(within(modal).getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByText(/^\d+ scheduling issues?$/)).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Generate schedule' }))
   fireEvent.click(
-    within(screen.getByRole('dialog')).getByRole('button', { name: 'Generate new schedule' })
+    within(screen.getByRole('dialog')).getByRole('button', { name: 'Replace schedule' })
   )
-  expect(screen.queryByText(/Your interviews were kept/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/^\d+ scheduling issues?$/)).not.toBeInTheDocument()
 })
 
 it('explains invalid schedule settings and keeps the editor open for correction', async () => {
@@ -231,8 +231,8 @@ it('adds interviews from time slots, rejects student overlaps, and removes only 
   expect(
     screen.getByRole('button', { name: 'Edit interview for Alice at Aero, round 1' })
   ).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Export sheet' }))
-  await screen.findByText('Workbook exported')
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
+  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
   const saved = vi.mocked(window.api.exportSheet).mock.calls[0][0]
   expect(saved.schedule).toHaveLength(1)
   expect(saved.students.Alice.interviewResults.map((i) => i.business)).toEqual(['Aero', 'Software'])
@@ -243,29 +243,27 @@ it('reports understandable import/export errors and keeps the existing workspace
   vi.mocked(window.api.parseSheet).mockResolvedValue({
     status: 'error',
     error: {
-      title: 'The sheet could not be imported',
+      title: 'Import failed',
       detail: 'Student Good Fit, G4: rating is 9.',
       fix: 'Enter a whole number from 1 to 5.'
     }
   })
-  fireEvent.click(screen.getByRole('button', { name: 'Import sheet' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
   fireEvent.click(screen.getByRole('button', { name: 'Choose workbook' }))
   await screen.findByRole('alert')
   expect(screen.getByRole('alert')).toHaveTextContent('G4')
-  expect(screen.getByRole('alert')).toHaveTextContent(
-    'How to fix it: Enter a whole number from 1 to 5'
-  )
+  expect(screen.getByRole('alert')).toHaveTextContent('Enter a whole number from 1 to 5')
   expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument()
   vi.mocked(window.api.exportSheet).mockRejectedValue(new Error('File locked'))
-  fireEvent.click(screen.getByRole('button', { name: 'Export sheet' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('File locked'))
-  expect(screen.getByRole('alert')).toHaveTextContent('Close the destination file in Excel')
+  expect(screen.getByRole('alert')).toHaveTextContent('Close the file in Excel')
 })
 it('treats cancellation as a normal outcome', async () => {
   render(<App />)
   vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'cancelled' })
-  fireEvent.click(screen.getByRole('button', { name: 'Import sheet' }))
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Import sheet' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Import workbook' })).toBeEnabled())
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
 it('validates new employers and prevents duplicate names', async () => {
@@ -277,10 +275,10 @@ it('validates new employers and prevents duplicate names', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Save employer' }))
   expect(screen.getByRole('alert')).toHaveTextContent('already exists')
   fireEvent.change(screen.getByLabelText('Employer name'), { target: { value: 'New Company' } })
-  fireEvent.change(screen.getByLabelText(/Internship places/), { target: { value: '-1' } })
+  fireEvent.change(screen.getByLabelText('Capacity'), { target: { value: '-1' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save employer' }))
   expect(screen.getByRole('alert')).toHaveTextContent('whole number of 0 or more')
-  fireEvent.change(screen.getByLabelText(/Internship places/), { target: { value: '2' } })
+  fireEvent.change(screen.getByLabelText('Capacity'), { target: { value: '2' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save employer' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'New Company' })).toBeInTheDocument()
@@ -292,11 +290,10 @@ it('shows storage failures without hiding them behind a success message', async 
   const save = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
     throw new Error('Storage is full')
   })
-  fireEvent.click(screen.getByRole('button', { name: 'Final Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
   expect(screen.getByRole('alert')).toHaveTextContent('Storage is full')
-  expect(screen.getByRole('alert')).toHaveTextContent('Export a workbook now')
-  expect(screen.getByText('Export to keep your changes')).toBeInTheDocument()
+  expect(screen.getByRole('alert')).toHaveTextContent('Export a workbook before closing')
   save.mockRestore()
 })
 it('recovers from a damaged saved workspace with a useful error', () => {
@@ -305,8 +302,8 @@ it('recovers from a damaged saved workspace with a useful error', () => {
     JSON.stringify({ ...emptyWorkspace(), employers: [null] })
   )
   render(<App />)
-  expect(screen.getByRole('heading', { name: 'Student Overview' })).toBeInTheDocument()
-  expect(screen.getByRole('alert')).toHaveTextContent('saved workspace could not be opened')
+  expect(screen.getByRole('heading', { name: 'Students' })).toBeInTheDocument()
+  expect(screen.getByRole('alert')).toHaveTextContent('Saved data could not be opened')
   expect(screen.getByRole('alert')).toHaveTextContent('Import your latest exported workbook')
 })
 
@@ -326,7 +323,7 @@ it('uses one industry bank for employer choices, student choices, and custom ind
     target: { value: ' Renewable   energy ' }
   })
   fireEvent.click(screen.getByRole('button', { name: 'Save employer' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Students' }))
   fireEvent.click(screen.getByRole('heading', { name: 'Alice' }))
   const studentModal = screen.getByRole('dialog', { name: 'Alice' })
   expect(within(studentModal).getByRole('checkbox', { name: 'Engineering' })).toBeChecked()
@@ -382,13 +379,13 @@ it('invalidates matches when feedback changes and enforces internship capacity f
   vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
   render(<App />)
   await importData()
-  fireEvent.click(screen.getByRole('button', { name: 'Final Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Approve matching' }))
   expect(screen.getByRole('button', { name: 'Matching approved' })).toBeDisabled()
   fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
   fireEvent.change(screen.getByLabelText('Placement for Bob'), { target: { value: 'Aero' } })
-  expect(screen.getByRole('alert')).toHaveTextContent('Aero has reached its internship capacity')
+  expect(screen.getByRole('alert')).toHaveTextContent('Aero has reached its capacity')
   expect(screen.getByLabelText('Placement for Bob')).toHaveValue('')
   fireEvent.change(screen.getByLabelText('Employer response for Alice at Aero'), {
     target: { value: 'no' }
@@ -421,4 +418,42 @@ it('keeps keyboard focus inside editors and returns focus to the control on Esca
   fireEvent.keyDown(dialog, { key: 'Escape' })
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(settingsButton).toHaveFocus()
+})
+
+it('removes an industry from students, employers, filters, and the saved option list', async () => {
+  const app = render(<App />)
+  await importData()
+  fireEvent.change(screen.getByLabelText('Filter interests'), { target: { value: 'Engineering' } })
+  fireEvent.click(screen.getByRole('heading', { name: 'Alice' }))
+  const studentModal = screen.getByRole('dialog', { name: 'Alice' })
+  fireEvent.click(
+    within(studentModal).getByRole('button', { name: 'Remove Aerospace from all industries' })
+  )
+  const cancelled = screen.getByRole('dialog', { name: 'Remove “Aerospace”?' })
+  expect(cancelled).toHaveTextContent('0 students and 1 employer')
+  fireEvent.click(within(cancelled).getByRole('button', { name: 'Cancel' }))
+  expect(within(studentModal).getByRole('checkbox', { name: 'Aerospace' })).toBeInTheDocument()
+  for (const industry of ['Engineering', 'Aerospace']) {
+    fireEvent.click(
+      within(studentModal).getByRole('button', { name: `Remove ${industry} from all industries` })
+    )
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: `Remove “${industry}”?` })).getByRole('button', {
+        name: 'Remove industry'
+      })
+    )
+    expect(within(studentModal).queryByRole('checkbox', { name: industry })).not.toBeInTheDocument()
+  }
+  fireEvent.click(within(studentModal).getByRole('button', { name: 'Done' }))
+  expect(screen.getByLabelText('Filter interests')).toHaveValue('')
+  expect(screen.getByText('No interests listed')).toBeInTheDocument()
+  app.unmount()
+  render(<App />)
+  expect(
+    within(screen.getByLabelText('Filter interests'))
+      .queryAllByRole('option')
+      .map((o) => o.textContent)
+  ).toEqual(['All interests'])
+  fireEvent.click(screen.getByRole('button', { name: 'Employers' }))
+  expect(screen.queryByText('Aerospace')).not.toBeInTheDocument()
 })

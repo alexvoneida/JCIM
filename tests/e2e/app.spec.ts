@@ -5,7 +5,7 @@ import {
   type ElectronApplication,
   type Page
 } from '@playwright/test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import ExcelJS from 'exceljs'
@@ -22,6 +22,12 @@ test.describe.configure({ mode: 'serial' })
 let app: ElectronApplication
 let page: Page
 let scratch: string
+
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false
+  )
 
 test.beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), 'jcim-e2e-'))
@@ -54,8 +60,8 @@ test.afterEach(async ({ browserName }, testInfo) => {
 
 test('opens a window showing the landing page', async () => {
   await expect(page).toHaveTitle('JCIM')
-  await expect(page.getByRole('heading', { name: 'Student Overview' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Start with your workbook' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Students', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No students yet' })).toBeVisible()
   await expect(page.getByText(/student workbook/i)).toHaveCount(0)
 })
 
@@ -102,9 +108,8 @@ test('imports, manages employers, schedules, matches, and exports a re-importabl
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] })
   }, source)
-  await page.getByRole('button', { name: 'Import sheet', exact: true }).click()
+  await page.getByRole('button', { name: 'Import workbook', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Leonard Williams' })).toBeVisible()
-  await page.getByRole('button', { name: 'Dismiss message' }).click()
   await page.getByRole('button', { name: 'Interview Schedule', exact: true }).click()
   await page.getByRole('button', { name: 'Edit schedule window and interview length' }).click()
   await page.getByLabel('Schedule end time', { exact: true }).fill('11:00')
@@ -150,13 +155,12 @@ test('imports, manages employers, schedules, matches, and exports a re-importabl
   await expect(page.getByText('10 min · override')).toBeVisible()
   await page.getByRole('button', { name: 'Done editing', exact: true }).click()
   await page.getByRole('button', { name: 'Approve schedule', exact: true }).click()
-  await page.getByRole('button', { name: 'Dismiss message' }).click()
   // Settings and manual overrides must survive real IPC export and re-import.
   await app.evaluate(({ dialog }, path) => {
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: path })
   }, scheduleExport)
-  await page.getByRole('button', { name: 'Export sheet', exact: true }).click()
-  await expect(page.getByText('Workbook exported', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Export workbook', exact: true }).click()
+  await expect.poll(() => exists(scheduleExport)).toBe(true)
   const scheduleWorkbook = new ExcelJS.Workbook()
   await scheduleWorkbook.xlsx.readFile(scheduleExport)
   const mike = scheduleWorkbook
@@ -175,17 +179,16 @@ test('imports, manages employers, schedules, matches, and exports a re-importabl
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] })
   }, scheduleExport)
-  await page.getByRole('button', { name: 'Import sheet', exact: true }).click()
+  await page.getByRole('button', { name: 'Import workbook', exact: true }).click()
   await page.getByRole('button', { name: 'Choose workbook', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Student Overview', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Students', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Interview Schedule', exact: true }).click()
   await expect(page.getByText('10 min · override')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Schedule approved' })).toBeDisabled()
-  await page.getByRole('button', { name: 'Final Matching', exact: true }).click()
+  await page.getByRole('button', { name: 'Matching', exact: true }).click()
   await page.getByRole('button', { name: 'Generate matching', exact: true }).click()
   await expect(page.locator('.feedback-card.selected')).toHaveCount(9)
   await page.getByRole('button', { name: 'Approve matching', exact: true }).click()
-  await page.getByRole('button', { name: 'Dismiss message' }).click()
   await page.getByRole('button', { name: 'Employers', exact: true }).click()
   await page.getByRole('switch', { name: 'Participation for Frontier Aero' }).click()
   await expect(
@@ -195,16 +198,14 @@ test('imports, manages employers, schedules, matches, and exports a re-importabl
   await expect(page.getByText('10 min · override')).toBeVisible()
   await expect(page.locator('.timetable-employer h2', { hasText: 'Frontier Aero' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Employers', exact: true }).click()
-  await page.getByRole('button', { name: 'Dismiss message' }).click()
   await page.getByRole('button', { name: 'New employer', exact: true }).click()
   await page.getByLabel('Employer name', { exact: true }).fill('New Employer')
   await page.getByLabel('Industry', { exact: true }).selectOption('__other_industry__')
   await page.getByLabel('New industry name', { exact: true }).fill('Renewable energy')
-  await page.getByLabel('Internship places', { exact: true }).fill('1')
+  await page.getByLabel('Capacity', { exact: true }).fill('1')
   await page.getByRole('button', { name: 'Save employer' }).click()
   await expect(page.getByRole('heading', { name: 'New Employer' })).toBeVisible()
-  await page.getByRole('button', { name: 'Dismiss message' }).click()
-  await page.getByRole('button', { name: 'Overview', exact: true }).click()
+  await page.getByRole('button', { name: 'Students', exact: true }).click()
   await page.getByRole('heading', { name: 'Leonard Williams', exact: true }).click()
   const studentDialog = page.getByRole('dialog', { name: 'Leonard Williams', exact: true })
   await studentDialog.getByRole('checkbox', { name: 'Renewable energy', exact: true }).check()
@@ -221,8 +222,8 @@ test('imports, manages employers, schedules, matches, and exports a re-importabl
   await app.evaluate(({ dialog }, path) => {
     dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath: path })
   }, destination)
-  await page.getByRole('button', { name: 'Export sheet', exact: true }).click()
-  await expect(page.getByText('Workbook exported', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Export workbook', exact: true }).click()
+  await expect.poll(() => exists(destination)).toBe(true)
   const exported = new ExcelJS.Workbook()
   await exported.xlsx.readFile(destination)
   expect(exported.getWorksheet('Student Good Fit')).toBeDefined()
@@ -238,9 +239,9 @@ test('imports, manages employers, schedules, matches, and exports a re-importabl
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] })
   }, destination)
-  await page.getByRole('button', { name: 'Import sheet', exact: true }).click()
+  await page.getByRole('button', { name: 'Import workbook', exact: true }).click()
   await page.getByRole('button', { name: 'Choose workbook' }).click()
-  await expect(page.getByRole('heading', { name: 'Student Overview' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Students', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Employers', exact: true }).click()
   await expect(
     page.getByRole('switch', { name: 'Participation for Frontier Aero' })
@@ -321,17 +322,17 @@ test('keeps interview cards readable and pins employer headers and time labels w
 })
 
 test('keeps current data and shows a repair instruction when import fails', async () => {
-  await page.getByRole('button', { name: 'Overview', exact: true }).click()
+  await page.getByRole('button', { name: 'Students', exact: true }).click()
   const path = join(scratch, 'broken.xlsx')
   await writeFile(path, 'This is not a valid Excel workbook')
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = () => Promise.resolve({ canceled: false, filePaths: [path] })
   }, path)
-  await page.getByRole('button', { name: 'Import sheet', exact: true }).click()
+  await page.getByRole('button', { name: 'Import workbook', exact: true }).click()
   await page.getByRole('button', { name: 'Choose workbook' }).click()
-  await expect(page.getByRole('alert')).toContainText('The sheet could not be imported')
+  await expect(page.getByRole('alert')).toContainText('Import failed')
   await expect(page.getByRole('alert')).toContainText('Reason:')
-  await expect(page.getByRole('alert')).toContainText('How to fix it:')
+  await expect(page.getByRole('alert')).toContainText('Open the file in Excel')
   await expect(page.getByRole('heading', { name: 'Leonard Williams' })).toBeVisible()
 })
 
@@ -342,9 +343,9 @@ test('shows destination errors when export fails and preserves current data', as
     },
     join(scratch, 'missing-folder', 'export.xlsx')
   )
-  await page.getByRole('button', { name: 'Export sheet', exact: true }).click()
-  await expect(page.getByRole('alert')).toContainText('The sheet could not be exported')
+  await page.getByRole('button', { name: 'Export workbook', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('Export failed')
   await expect(page.getByRole('alert')).toContainText('missing-folder')
-  await expect(page.getByRole('alert')).toContainText('How to fix it:')
+  await expect(page.getByRole('alert')).toContainText('destination folder')
   await expect(page.getByRole('heading', { name: 'Leonard Williams' })).toBeVisible()
 })

@@ -65,7 +65,7 @@ export default function SchedulePage({
         day: 'numeric',
         year: 'numeric'
       })
-    : 'Choose an interview date'
+    : 'No interview date set'
   const minuteMarks = new Set<number>([minutes(global.start), minutes(global.end)])
   for (
     let time = minutes(global.start);
@@ -87,7 +87,7 @@ export default function SchedulePage({
     global.durationMinutes,
     ...data.schedule.map((i) => interviewDuration(data, i))
   )
-  const pixelsPerMinute = Math.max(4, Math.min(20, 120 / Math.max(1, smallestDuration)))
+  const pixelsPerMinute = Math.max(1.5, Math.min(8, 80 / Math.max(1, smallestDuration)))
   const layout = employers.map((employer) => {
     const ends: number[] = []
     const interviews = data.schedule
@@ -102,12 +102,12 @@ export default function SchedulePage({
     return { employer, positioned, lanes: Math.max(1, ends.length) }
   })
   const gridStyle: CSSProperties = {
-    minWidth: 96 + layout.reduce((total, item) => total + Math.max(230, item.lanes * 160), 0),
-    gridTemplateColumns: `96px ${layout.map((item) => `minmax(${Math.max(230, item.lanes * 160)}px, 1fr)`).join(' ')}`,
-    gridTemplateRows: `112px ${marks
+    minWidth: 76 + layout.reduce((total, item) => total + Math.max(180, item.lanes * 150), 0),
+    gridTemplateColumns: `76px ${layout.map((item) => `minmax(${Math.max(180, item.lanes * 150)}px, 1fr)`).join(' ')}`,
+    gridTemplateRows: `auto ${marks
       .slice(0, -1)
-      .map((time, index) => `${Math.max(24, (marks[index + 1] - time) * pixelsPerMinute)}px`)
-      .join(' ')} 32px`
+      .map((time, index) => `${Math.max(20, (marks[index + 1] - time) * pixelsPerMinute)}px`)
+      .join(' ')} 20px`
   }
   function openSettings(value: 'overall' | Employer) {
     setSettingsEditor(value)
@@ -262,7 +262,7 @@ export default function SchedulePage({
             onClick={() => openInterview({})}
             disabled={!students.length || !employers.length}
           >
-            ＋ Add interview
+            Add interview
           </button>
         )}
       </div>
@@ -270,51 +270,32 @@ export default function SchedulePage({
         <section className="notice error schedule-issues" role="alert">
           <div>
             <strong>
-              {issues.length} scheduling issue{issues.length === 1 ? '' : 's'} need attention
+              {issues.length} scheduling issue{issues.length === 1 ? '' : 's'}
             </strong>
-            <p>
-              Your interviews were kept. Edit the highlighted interviews or the settings before
-              approving or exporting.
-            </p>
-            <details open>
-              <summary>Show scheduling issues</summary>
-              <ul>
-                {issues.map((issue, index) => (
-                  <li key={`${issue.id ?? 'settings'}-${index}`}>{issue.detail}</li>
-                ))}
-              </ul>
-            </details>
+            <ul>
+              {issues.map((issue, index) => (
+                <li key={`${issue.id ?? 'settings'}-${index}`}>{issue.detail}</li>
+              ))}
+            </ul>
           </div>
         </section>
       )}
       <section className="board schedule-board">
         <div className="board-heading">
-          <strong>INTERVIEW TIMETABLE · {dateLabel}</strong>
+          <strong>{dateLabel}</strong>
           <span className={`status-dot ${data.scheduleApproved ? 'approved' : ''}`}>
             {data.scheduleApproved ? 'Approved' : 'Awaiting approval'}
-          </span>
-        </div>
-        <div className="schedule-grid-hint">
-          <span>
-            Employers across the top · Times down the left · Interviews sharing a time line up
-          </span>
-          <span>
-            {editSchedule
-              ? 'Use a slot’s + button to add an interview, or the pencil to edit one.'
-              : 'Use the pencil next to an employer for interview settings.'}
           </span>
         </div>
         {!employers.length ? (
           <div className="empty">
             <h2>No active employers</h2>
-            <p>Import a workbook or turn on employers on the Employers page.</p>
+            <p>Import a workbook or activate employers on the Employers page.</p>
           </div>
         ) : (
           <div className="timetable-scroll" tabIndex={0} aria-label="Interview timetable">
             <div className="schedule-grid" style={gridStyle}>
-              <div className="time-corner" style={{ gridRow: 1, gridColumn: 1 }}>
-                TIME
-              </div>
+              <div className="time-corner" style={{ gridRow: 1, gridColumn: 1 }} />
               {layout.map(({ employer }, col) => {
                 const config = employerSchedule(data, employer)
                 return (
@@ -336,13 +317,10 @@ export default function SchedulePage({
                     <p>
                       {timeLabel(config.start)} – {timeLabel(config.end)}
                     </p>
-                    <div className="timetable-employer-settings">
-                      <span>{config.durationMinutes} min</span>
-                      <span>
-                        {config.parallelInterviews} student
-                        {config.parallelInterviews === 1 ? '' : 's'} at once
-                      </span>
-                    </div>
+                    <p className="timetable-employer-settings">
+                      {config.durationMinutes} min · {config.parallelInterviews} student
+                      {config.parallelInterviews === 1 ? '' : 's'} at once
+                    </p>
                   </div>
                 )
               })}
@@ -372,7 +350,7 @@ export default function SchedulePage({
                             openInterview({ employer: employer.name, time: clockTime(time) })
                           }
                         >
-                          ＋
+                          +
                         </button>
                       )}
                     </div>
@@ -410,15 +388,14 @@ export default function SchedulePage({
                           </button>
                         )}
                       </div>
-                      <p>
-                        {timeLabel(interview.time)} – {timeLabel(clockTime(end))}
-                      </p>
                       <div className="timetable-interview-footer">
-                        <span className="tag">Round {interview.round}</span>
                         <span>
-                          {duration} min
-                          {interview.durationMinutes !== undefined ? ' · override' : ''}
+                          {timeLabel(interview.time)} – {timeLabel(clockTime(end))}
                         </span>
+                        <span>Round {interview.round}</span>
+                        {interview.durationMinutes !== undefined && (
+                          <span>{duration} min · override</span>
+                        )}
                       </div>
                       {invalid && (
                         <span className="interview-conflict-label">Scheduling conflict</span>
@@ -432,9 +409,7 @@ export default function SchedulePage({
         )}
         {!data.schedule.length && !!employers.length && (
           <div className="schedule-empty-bar">
-            <span>
-              Generate interviews from your imported records or add them with Edit schedule.
-            </span>
+            <span>No interviews scheduled.</span>
             <button onClick={onGenerate}>Generate schedule</button>
           </div>
         )}
@@ -449,11 +424,9 @@ export default function SchedulePage({
           onClose={() => setSettingsEditor(null)}
         >
           <form onSubmit={saveSettings} noValidate>
-            <p className="small muted">
-              {editorEmployer
-                ? 'Leave a field blank to use the overall schedule setting. Employer hours must fit inside the overall window.'
-                : 'Set the overall interview hours and default length. Employers can override their own hours and interview length.'}
-            </p>
+            {editorEmployer && (
+              <p className="small muted">Leave a field blank to use the overall setting.</p>
+            )}
             <div className="schedule-form-grid">
               <label>
                 {editorEmployer ? 'Employer start time' : 'Schedule start time'}
@@ -503,19 +476,10 @@ export default function SchedulePage({
                   step="1"
                   name="parallel"
                   aria-label="Students at once"
-                  aria-describedby="parallel-interviews-help"
                   defaultValue={editorEmployer.scheduling?.parallelInterviews ?? 1}
                 />
-                <span className="field-help" id="parallel-interviews-help">
-                  Enter 2 or more for simultaneous interviews. This does not change the employer’s
-                  internship places.
-                </span>
               </label>
             )}
-            <p className="small muted">
-              Saving keeps the current interview times and resets schedule approval. Conflicts will
-              be highlighted for you to fix.
-            </p>
             {error && (
               <p className="form-error" role="alert">
                 {error}
@@ -547,7 +511,7 @@ export default function SchedulePage({
               </select>
             </label>
             <label>
-              Active employer
+              Employer
               <select
                 name="employer"
                 defaultValue={interviewEditor.interview?.employer ?? interviewEditor.employer}
@@ -592,7 +556,7 @@ export default function SchedulePage({
                 defaultValue={interviewEditor.interview?.durationMinutes ?? ''}
               />
               <span className="field-help" id="duration-override-help">
-                Leave blank to follow this employer’s interview length, or the overall default.
+                Leave blank to use the employer’s interview length.
               </span>
             </label>
             {error && (
@@ -600,10 +564,6 @@ export default function SchedulePage({
                 {error}
               </p>
             )}
-            <p className="small muted">
-              Students cannot be in two interviews at the same time. Simultaneous interviews must
-              fit the employer’s Students at once limit.
-            </p>
             <div className="modal-actions">
               {interviewEditor.interview && (
                 <button

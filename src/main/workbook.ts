@@ -692,7 +692,7 @@ export function fileError(error: unknown, action: 'import' | 'export', path: str
   if (error instanceof WorkbookIssue)
     return {
       ...error.issue,
-      title: action === 'export' ? 'The sheet could not be exported' : error.issue.title
+      title: action === 'export' ? 'Export failed' : error.issue.title
     }
   const reason = error instanceof Error ? error.message : String(error)
   let fix =
@@ -709,7 +709,7 @@ export function fileError(error: unknown, action: 'import' | 'export', path: str
   if (/ENOSPC/i.test(reason))
     fix = `Free some disk space or choose another drive, then ${action} again.`
   return {
-    title: `The sheet could not be ${action === 'import' ? 'imported' : 'exported'}`,
+    title: action === 'import' ? 'Import failed' : 'Export failed',
     detail: `${action === 'import' ? 'Reading' : 'Writing'} “${path}” failed. Reason: ${reason}`,
     fix
   }
