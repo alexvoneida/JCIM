@@ -1,4 +1,4 @@
-import { Student } from '../shared/student'
+import type { Workspace, SheetResult } from './workspace'
 
 export const IpcChannel = {
   getAppVersion: 'app:get-version',
@@ -11,6 +11,6 @@ export interface DesktopApi {
     electron: string
   }
   getAppVersion: () => Promise<string>
-  parseSheet: () => Promise<{ [key: string]: Student }>
-  exportSheet: (students: { [key: string]: Student }) => Promise<void>
+  parseSheet: () => Promise<SheetResult<Workspace>>
+  exportSheet: (workspace: Workspace) => Promise<SheetResult<{ path: string }>>
 }

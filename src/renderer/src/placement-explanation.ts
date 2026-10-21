@@ -27,6 +27,9 @@ export function explainAlternative(
   })
   const lostPlaces = result.assignments.length - (alternative.assignments.length + 1)
   const lostRating = result.totalRating - (alternative.totalRating + rating)
+  if (lostPlaces < 0 || (lostPlaces === 0 && lostRating < 0)) {
+    return `An allocation using this employer can match ${alternative.assignments.length + 1} students with a total preference score of ${alternative.totalRating + rating}. Generate matching again to compare the best overall allocation with the current edits.`
+  }
   if (lostPlaces > 0) {
     return `Placing here would leave ${lostPlaces} fewer student${lostPlaces === 1 ? '' : 's'} matched overall.`
   }
