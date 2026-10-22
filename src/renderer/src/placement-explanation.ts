@@ -1,4 +1,4 @@
-import { matchInternships } from './matching'
+import { canFill, matchInternships } from './matching'
 import type { MatchingInput, MatchingResult } from './matching-types'
 
 // Compare the actual solution with the best solution when this student is forced
@@ -14,17 +14,28 @@ export function explainAlternative(
   if (rating === undefined || !input.companyLikes.get(company)?.includes(student)) {
     return 'Not eligible: a student rating and employer approval are both required.'
   }
-  const capacity = input.companyCapacities.get(company) ?? 0
-  if (capacity < 1) return 'No places available at this employer.'
+  const companyRoles = input.roles.filter((r) => r.company === company && r.capacity >= 1)
+  if (!companyRoles.length) return 'No places available at this employer.'
+  const fitting = companyRoles.filter((r) => canFill(input, student, r))
+  if (!fitting.length) return 'No role at this employer matches this student’s interests.'
   const remainingRatings = new Map(input.studentRatings)
   remainingRatings.delete(student)
-  const remainingCapacities = new Map(input.companyCapacities)
-  remainingCapacities.set(company, capacity - 1)
-  const alternative = matchInternships({
-    ...input,
-    studentRatings: remainingRatings,
-    companyCapacities: remainingCapacities
-  })
+  // Force the student into each fitting role and keep the best remaining allocation.
+  const alternative = fitting
+    .map((role) =>
+      matchInternships({
+        ...input,
+        studentRatings: remainingRatings,
+        roles: input.roles.map((r) => (r.id === role.id ? { ...r, capacity: r.capacity - 1 } : r))
+      })
+    )
+    .reduce((best, option) =>
+      option.assignments.length > best.assignments.length ||
+      (option.assignments.length === best.assignments.length &&
+        option.totalRating > best.totalRating)
+        ? option
+        : best
+    )
   const lostPlaces = result.assignments.length - (alternative.assignments.length + 1)
   const lostRating = result.totalRating - (alternative.totalRating + rating)
   if (lostPlaces < 0 || (lostPlaces === 0 && lostRating < 0)) {
