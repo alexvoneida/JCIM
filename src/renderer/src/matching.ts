@@ -1,4 +1,15 @@
-import type { Rating, MatchingInput, Assignment, MatchingResult } from './matching-types'
+import type { Rating, MatchingInput, Assignment, MatchingResult, JobRole } from './matching-types'
+import { canFillRole } from '../../shared/roles'
+
+// Both sides must want the match, and a titled role also needs one of the
+// student's interests to match the role's tags.
+export function canFill(input: MatchingInput, student: string, role: JobRole): boolean {
+  return (
+    !!input.companyLikes.get(role.company)?.includes(student) &&
+    input.studentRatings.get(student)?.has(role.company) === true &&
+    canFillRole(input.studentInterests.get(student), role)
+  )
+}
 
 type Edge = {
   to: number
@@ -12,7 +23,6 @@ function addEdge(graph: Edge[][], from: number, to: number, capacity: number, co
     to,
     rev: graph[to].length,
     capacity,
-
     cost
   }
 
@@ -30,30 +40,35 @@ function addEdge(graph: Edge[][], from: number, to: number, capacity: number, co
 }
 
 export function matchInternships(input: MatchingInput): MatchingResult {
-  const { companyLikes, studentRatings, companyCapacities } = input
+  const { studentRatings, roles } = input
 
   const students = Array.from(studentRatings.keys())
-  const companies = Array.from(companyCapacities.keys())
 
+  //create graph nodes for the algorithm
   const source = 0
   const studentStart = 1
-  const companyStart = studentStart + students.length
-  const sink = companyStart + companies.length
+  const roleStart = studentStart + students.length
+  const sink = roleStart + roles.length
+
   const graph: Edge[][] = Array.from({ length: sink + 1 }, () => [])
 
   const studentIndex = new Map(students.map((student, i) => [student, studentStart + i]))
 
-  const companyIndex = new Map(companies.map((company, i) => [company, companyStart + i]))
+  const roleIndex = new Map(roles.map((role, i) => [role.id, roleStart + i]))
 
-  // max internship per student is 1 ofc
+  if (roleIndex.size !== roles.length) {
+    throw new Error('Each job role must have a unique id.')
+  }
+
+  //only one internship per student max
   for (const student of students) {
     addEdge(graph, source, studentIndex.get(student)!, 1, 0)
   }
 
-  // store the student company assingments
   const assignmentEdges: {
     student: string
     company: string
+    role: string | null
     rating: Rating
     edge: Edge
   }[] = []
@@ -61,36 +76,46 @@ export function matchInternships(input: MatchingInput): MatchingResult {
   for (const student of students) {
     const ratings = studentRatings.get(student)!
 
-    for (const company of companies) {
-      const likedStudents = companyLikes.get(company) ?? []
-      const rating = ratings.get(company)
-
-      //students and companies must both want each other to be matched
-      if (!likedStudents.includes(student) || rating === undefined) {
+    for (const role of roles) {
+      //check that students can go in that role
+      if (!canFill(input, student, role)) {
         continue
       }
 
-      // to prioritize students that like the company 5-5 is a cost of 0
+      const rating = ratings.get(role.company)!
+
+      // Higher ratings have lower costs:
+      // rating 5 -> cost 0
+      // rating 4 -> cost 1
+      // rating 3 -> cost 2
+      // rating 2 -> cost 3
+      // rating 1 -> cost 4
       const cost = 5 - rating
 
-      const edge = addEdge(graph, studentIndex.get(student)!, companyIndex.get(company)!, 1, cost)
+      const edge = addEdge(graph, studentIndex.get(student)!, roleIndex.get(role.id)!, 1, cost)
 
-      assignmentEdges.push({ student, company, rating, edge })
+      assignmentEdges.push({
+        student,
+        company: role.company,
+        role: role.title,
+        rating,
+        edge
+      })
     }
   }
 
-  // make sure the companies arent highering too many students
-  for (const company of companies) {
-    const capacity = Math.max(0, Math.floor(companyCapacities.get(company) ?? 0))
+  // Each job role has its own hiring capacity.
+  for (const role of roles) {
+    const capacity = Math.max(0, Math.floor(role.capacity))
 
-    addEdge(graph, companyIndex.get(company)!, sink, capacity, 0)
+    addEdge(graph, roleIndex.get(role.id)!, sink, capacity, 0)
   }
 
-  // Find and send flow along the cheapest remaining path.
-  // Bellman-Ford supports negative-cost reverse edges.
   while (true) {
     const distance = Array(graph.length).fill(Infinity) as number[]
+
     const previousNode = Array(graph.length).fill(-1) as number[]
+
     const previousEdge = Array(graph.length).fill(-1) as number[]
 
     distance[source] = 0
@@ -99,12 +124,16 @@ export function matchInternships(input: MatchingInput): MatchingResult {
       let changed = false
 
       for (let from = 0; from < graph.length; from++) {
-        if (distance[from] === Infinity) continue
+        if (distance[from] === Infinity) {
+          continue
+        }
 
         for (let edgeIndex = 0; edgeIndex < graph[from].length; edgeIndex++) {
           const edge = graph[from][edgeIndex]
 
-          if (edge.capacity <= 0) continue
+          if (edge.capacity <= 0) {
+            continue
+          }
 
           const nextDistance = distance[from] + edge.cost
 
@@ -117,13 +146,15 @@ export function matchInternships(input: MatchingInput): MatchingResult {
         }
       }
 
-      if (!changed) break
+      if (!changed) {
+        break
+      }
     }
 
-    // if there is no more path then no more students can be matched
-    if (previousNode[sink] === -1) break
+    if (previousNode[sink] === -1) {
+      break
+    }
 
-    // Send one student along this path.
     for (let node = sink; node !== source; node = previousNode[node]) {
       const from = previousNode[node]
       const edge = graph[from][previousEdge[node]]
@@ -133,20 +164,24 @@ export function matchInternships(input: MatchingInput): MatchingResult {
     }
   }
 
-  // A used assignment edge has no remaining forward capacity.
   const assignments: Assignment[] = assignmentEdges
     .filter(({ edge }) => edge.capacity === 0)
-    .map(({ student, company, rating }) => ({
+    .map(({ student, company, role, rating }) => ({
       student,
       company,
+      role,
       rating
     }))
 
   const matchedStudents = new Set(assignments.map((assignment) => assignment.student))
 
+  const unmatchedStudents = students.filter((student) => !matchedStudents.has(student))
+
+  const totalRating = assignments.reduce((total, assignment) => total + assignment.rating, 0)
+
   return {
     assignments,
-    unmatchedStudents: students.filter((student) => !matchedStudents.has(student)),
-    totalRating: assignments.reduce((total, assignment) => total + assignment.rating, 0)
+    unmatchedStudents,
+    totalRating
   }
 }

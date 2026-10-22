@@ -391,6 +391,8 @@ it('invalidates matches when feedback changes and enforces internship capacity f
     target: { value: 'no' }
   })
   expect(screen.getByLabelText('Placement for Alice')).toHaveValue('')
+  // A declined student is no longer listed under that employer.
+  expect(screen.queryByLabelText('Employer response for Alice at Aero')).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Approve matching' })).toBeDisabled()
   fireEvent.change(screen.getByLabelText('Placement for Bob'), { target: { value: 'Aero' } })
   expect(screen.getByLabelText('Placement for Bob')).toHaveValue('Aero')
@@ -456,4 +458,41 @@ it('removes an industry from students, employers, filters, and the saved option 
   ).toEqual(['All interests'])
   fireEvent.click(screen.getByRole('button', { name: 'Employers' }))
   expect(screen.queryByText('Aerospace')).not.toBeInTheDocument()
+})
+
+it('shows a matching column for each role with the approved students who fit it', async () => {
+  const data = fixture()
+  data.employers[0] = {
+    ...data.employers[0],
+    capacity: 2,
+    roles: [
+      { title: 'Engineering', capacity: 1 },
+      { title: 'HR', capacity: 1, tags: ['Human Resources'] }
+    ]
+  }
+  for (const [name, interests] of [
+    ['Bob', ['Human Resources']],
+    ['Cara', ['Art']]
+  ] as const) {
+    data.students[name] = Object.assign(new Student(), { name, interests: [...interests] })
+    const interview = new InterviewResult(name, '1', 'Aero', '', '', '', 'Yes', '4')
+    interview.employerAccept = true
+    data.students[name].interviewResults.push(interview)
+  }
+  vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  const column = (text: string) =>
+    screen.getByText(text, { selector: '.company-heading p' }).closest('section')!
+  const names = (section: HTMLElement) =>
+    within(section)
+      .getAllByRole('heading', { level: 3 })
+      .map((h) => h.textContent)
+  expect(names(column('Engineering'))).toEqual(['Alice'])
+  expect(names(column('HR'))).toEqual(['Bob'])
+  expect(names(column('Approved, but interests match no role'))).toEqual(['Cara'])
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  expect(within(column('Engineering')).getByText('1 of 1 filled')).toBeInTheDocument()
+  expect(within(column('HR')).getByText('1 of 1 filled')).toBeInTheDocument()
 })

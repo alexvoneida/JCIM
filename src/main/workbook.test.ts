@@ -187,7 +187,8 @@ it('reads older JCIM exports without optional columns or schedule settings', () 
   const data = fixture()
   data.schedule[0].time = '18:00'
   const workbook = writeWorkspace(new ExcelJS.Workbook(), data)
-  workbook.getWorksheet('JCIM Employers')!.spliceColumns(5, 4)
+  workbook.getWorksheet('JCIM Employers')!.spliceColumns(5, 5)
+  workbook.getWorksheet('JCIM Matches')!.spliceColumns(4, 1)
   workbook.getWorksheet('JCIM Schedule')!.spliceColumns(6, 1)
   const settings = workbook.getWorksheet('JCIM Settings')!
   for (let row = settings.rowCount; row >= 2; row--)
@@ -229,8 +230,8 @@ it('imports nonstandard legacy answers as unknown with a specific cell note', ()
 })
 it('rejects a placement that contradicts a later interview round', () => {
   const data = fixture()
-  const later = new InterviewResult('Alice', '2', 'Aero', 'Engineer', '', '', 'No', '5')
-  later.employerAccept = true
+  const later = new InterviewResult('Alice', '2', 'Aero', 'Engineer', '', '', '', '5')
+  later.employerAccept = false
   data.students.Alice.interviewResults.push(later)
   expect(() => writeWorkspace(new ExcelJS.Workbook(), data)).toThrow(/placement.*not valid/)
 })
@@ -265,4 +266,30 @@ it('includes industry options from unmatched survey students and potential emplo
     'Finance',
     'Public Health'
   ])
+})
+
+it('round trips employer roles, tags and the role of each placement', async () => {
+  const data = fixture()
+  data.employers[0] = {
+    ...data.employers[0],
+    capacity: 3,
+    roles: [
+      { title: 'Engineering', capacity: 2 },
+      { title: 'HR', capacity: 1, tags: ['Human Resources', 'Business'] }
+    ]
+  }
+  data.placements = [{ student: 'Alice', company: 'Aero', role: 'Engineering', rating: 5 }]
+  const exported = writeWorkspace(new ExcelJS.Workbook(), data)
+  const loaded = new ExcelJS.Workbook()
+  await loaded.xlsx.load(await exported.xlsx.writeBuffer())
+  expect(loaded.getWorksheet('JCIM Employers')!.getCell('I2').value).toBe(
+    'Engineering: 2, HR [Human Resources, Business]: 1'
+  )
+  expect(readWorkbook(loaded).workspace).toMatchObject(data)
+  // Alice's interests are Engineering and Finance, so an HR placement is rejected.
+  loaded.getWorksheet('JCIM Matches')!.getCell('D2').value = 'HR'
+  expect(() => readWorkbook(loaded)).toThrow(/JCIM Matches.*row 2.*not valid/)
+  loaded.getWorksheet('JCIM Matches')!.getCell('D2').value = 'Engineering'
+  loaded.getWorksheet('JCIM Employers')!.getCell('C2').value = 5
+  expect(() => readWorkbook(loaded)).toThrow(/JCIM Employers.*row 2.*capacity 5/)
 })

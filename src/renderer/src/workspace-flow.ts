@@ -1,7 +1,8 @@
 import type { Workspace } from '../../shared/workspace'
 import type { InterviewResult } from '../../shared/interviewResult'
 import { latestInterviews } from '../../shared/feedback'
-import type { MatchingInput, Rating } from './matching-types'
+import type { JobRole, MatchingInput, Rating } from './matching-types'
+import { employerRoles } from '../../shared/roles'
 
 export function preference(result: Pick<InterviewResult, 'rank'>): Rating | undefined {
   return Number.isInteger(result.rank) && result.rank >= 1 && result.rank <= 5
@@ -20,13 +21,22 @@ export function matchingInput(data: Workspace): MatchingInput {
   const feedback = latestFeedback(data)
   const eligible = feedback.filter(
     (i) =>
+      // Students cannot decline; a low rating (1/5) is how they show less interest.
       i.employerAccept === true &&
-      i.acceptance !== false &&
       preference(i) !== undefined &&
       active.some((e) => e.name === i.business)
   )
+  const roles: JobRole[] = active.flatMap((e) =>
+    employerRoles(e).map((r, i) => ({
+      id: JSON.stringify([e.name, i]),
+      company: e.name,
+      title: r.title,
+      tags: r.tags,
+      capacity: r.capacity
+    }))
+  )
   return {
-    companyCapacities: new Map(active.map((e) => [e.name, e.capacity])),
+    roles,
     companyLikes: new Map(
       active.map((e) => [
         e.name,
@@ -40,7 +50,8 @@ export function matchingInput(data: Workspace): MatchingInput {
           eligible.filter((i) => i.student === s.name).map((i) => [i.business, preference(i)!])
         )
       ])
-    )
+    ),
+    studentInterests: new Map(Object.values(data.students).map((s) => [s.name, s.interests ?? []]))
   }
 }
 

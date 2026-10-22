@@ -1,10 +1,18 @@
 import type { Student } from './student'
 
+export interface EmployerRole {
+  title: string
+  capacity: number
+  // Student interests that fit this role. When empty, the title is the only tag.
+  tags?: string[]
+}
+
 export interface Employer {
   name: string
   industry: string
   capacity: number
   active: boolean
+  roles?: EmployerRole[]
   scheduling?: EmployerScheduling
 }
 
@@ -33,6 +41,7 @@ export interface ScheduledInterview {
 export interface Placement {
   student: string
   company: string
+  role?: string | null
   rating: 1 | 2 | 3 | 4 | 5
 }
 

@@ -3,6 +3,7 @@ import { scheduleIssues, scheduleSettings } from '../shared/scheduling'
 import { rememberIndustries } from '../shared/industries'
 import { latestInterviews } from '../shared/feedback'
 import { Student } from '../shared/student'
+import { canFillRole, employerRoles, formatRoles, parseRoles, sameRole } from '../shared/roles'
 import { InterviewResult } from '../shared/interviewResult'
 import { emptyWorkspace, type Workspace, type SheetError } from '../shared/workspace'
 
@@ -112,9 +113,11 @@ const exportHeaders = {
     'Interview start',
     'Interview end',
     'Interview minutes',
-    'Students at once'
+    'Students at once',
+    'Roles'
   ],
-  schedule: [...headers.schedule, 'Interview minutes']
+  schedule: [...headers.schedule, 'Interview minutes'],
+  matches: [...headers.matches, 'Role']
 }
 
 function requiredSheet(workbook: ExcelJS.Workbook, key: keyof typeof names): ExcelJS.Worksheet {
@@ -193,10 +196,23 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
         `“${employers.name}”, row ${row}: Active is blank or unknown for “${name}”.`,
         'Set Active to Yes or No.'
       )
+    const capacity = number(employers, row, 3, 'capacity', 0)
+    const { roles, error } = parseRoles(text(employers, row, 9))
+    if (error)
+      fail(
+        `“${employers.name}”, cell ${employers.getCell(row, 9).address}: ${error}`,
+        'List roles as “Title: places”, separated by commas, for example “Engineering: 2, HR: 1”. Leave blank for general places.'
+      )
+    if (roles.length && roles.reduce((sum, r) => sum + r.capacity, 0) !== capacity)
+      fail(
+        `“${employers.name}”, row ${row}: capacity ${capacity} does not equal the total places in Roles for “${name}”.`,
+        'Set Capacity to the sum of the role places, or clear Roles.'
+      )
     data.employers.push({
       name,
       industry: text(employers, row, 2),
-      capacity: number(employers, row, 3, 'capacity', 0),
+      capacity,
+      ...(roles.length ? { roles } : {}),
       active,
       scheduling: {
         start: text(employers, row, 5) || undefined,
@@ -277,24 +293,27 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
     checkReferences(data, matches.name, row, student, company)
     const rating = number(matches, row, 3, 'student rating', 1, 5) as 1 | 2 | 3 | 4 | 5
     const employer = data.employers.find((e) => e.name === company)!
-    const eligible = latestInterviews(data.students[student]).some(
-      ({ interview: i }) =>
-        i.business === company &&
-        i.employerAccept === true &&
-        i.acceptance !== false &&
-        i.rank === rating
+    const interview = latestInterviews(data.students[student]).find(
+      ({ interview: i }) => i.business === company && i.employerAccept === true && i.rank === rating
+    )?.interview
+    const roleText = text(matches, row, 4)
+    const role = employerRoles(employer).find((r) =>
+      r.title === null ? !roleText : sameRole(r.title, roleText)
     )
     if (
       !employer.active ||
-      !eligible ||
+      !interview ||
+      !role ||
+      !canFillRole(data.students[student].interests, role) ||
       data.placements.some((p) => p.student === student) ||
-      data.placements.filter((p) => p.company === company).length >= employer.capacity
+      data.placements.filter((p) => p.company === company && sameRole(p.role, role.title)).length >=
+        role.capacity
     )
       fail(
         `“${matches.name}”, row ${row}: placement of “${student}” with “${company}” is not valid.`,
-        'Check employer status and capacity, employer approval, student acceptance/rating, and duplicate placements. Then generate matching again.'
+        'Check employer status, role and capacity, employer approval, student rating, and duplicate placements. Then generate matching again.'
       )
-    data.placements.push({ student, company, rating })
+    data.placements.push({ student, company, role: role.title, rating })
   })
   const settings = requiredSheet(workbook, 'settings')
   const values = new Map<string, string>()
@@ -664,14 +683,15 @@ export function writeWorkspace(workbook: ExcelJS.Workbook, data: Workspace): Exc
         e.scheduling?.start ?? '',
         e.scheduling?.end ?? '',
         e.scheduling?.durationMinutes ?? '',
-        e.scheduling?.parallelInterviews ?? ''
+        e.scheduling?.parallelInterviews ?? '',
+        formatRoles(e.roles)
       ])
   for (const i of data.schedule)
     workbook
       .getWorksheet(names.schedule)!
       .addRow([i.id, i.student, i.employer, i.time, i.round, i.durationMinutes ?? ''])
   for (const p of data.placements)
-    workbook.getWorksheet(names.matches)!.addRow([p.student, p.company, p.rating])
+    workbook.getWorksheet(names.matches)!.addRow([p.student, p.company, p.rating, p.role ?? ''])
   const settings = workbook.getWorksheet(names.settings)!
   settings.addRows([
     ['Format version', '1'],
