@@ -34,7 +34,12 @@ export function canFillRole(
   role: { title: string | null; tags: string[] }
 ): boolean {
   if (role.title === null) return true
-  return (interests ?? []).some((i) => role.tags.some((t) => sameRole(i, t)))
+  return sharedTags(interests, role).length > 0
+}
+
+// The role's tags that match one of the student's interests, in the role's tag order.
+export function sharedTags(interests: string[] | undefined, role: { tags: string[] }): string[] {
+  return role.tags.filter((t) => (interests ?? []).some((i) => sameRole(i, t)))
 }
 
 // "Engineering: 2" when the only tag is the title, otherwise "HR [Human Resources, Business]: 1".

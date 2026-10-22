@@ -20,7 +20,8 @@ import {
   employerRoles,
   formatRoles,
   parseRoles,
-  sameRole
+  sameRole,
+  sharedTags
 } from '../../shared/roles'
 import { explainAlternative } from './placement-explanation'
 
@@ -334,6 +335,7 @@ export default function App() {
       key: string
       employer: Employer
       title: string | null
+      tags: string[]
       // Undefined for the column of approved students who fit no role.
       capacity?: number
       cards: typeof approved
@@ -341,6 +343,7 @@ export default function App() {
       key: JSON.stringify([e.name, role.title]),
       employer: e,
       title: role.title,
+      tags: role.tags,
       capacity: role.capacity,
       cards: approved.filter((i) => fits(i.student, role))
     }))
@@ -350,6 +353,7 @@ export default function App() {
         key: JSON.stringify([e.name, 'unfit']),
         employer: e,
         title: null,
+        tags: [],
         cards: unfit
       })
     return columns
@@ -1023,7 +1027,7 @@ export default function App() {
                 </Empty>
               ) : (
                 <div className="company-columns">
-                  {matchingColumns.map(({ key, employer: e, title, capacity, cards }) => {
+                  {matchingColumns.map(({ key, employer: e, title, tags, capacity, cards }) => {
                     const unfit = capacity === undefined
                     // Labels name the role so a student listed under two roles stays distinct.
                     const where = `${e.name}${title ? ` (${title})` : unfit ? ' (no matching role)' : ''}`
@@ -1145,6 +1149,27 @@ export default function App() {
                                       {i.student} rated {e.name} {i.rank}/5 and was approved by the
                                       employer.
                                     </p>
+                                    {title &&
+                                      (() => {
+                                        const shared = sharedTags(
+                                          data.students[i.student]?.interests,
+                                          { tags }
+                                        )
+                                        return (
+                                          <p>
+                                            {i.student} and the {title} role both share the tag
+                                            {shared.length === 1 ? '' : 's'}{' '}
+                                            {shared.map((t, n) => (
+                                              <span key={t}>
+                                                {n > 0 &&
+                                                  (n === shared.length - 1 ? ' and ' : ', ')}
+                                                <strong>{t}</strong>
+                                              </span>
+                                            ))}
+                                            .
+                                          </p>
+                                        )
+                                      })()}
                                     {[...(input.studentRatings.get(i.student) ?? [])]
                                       .filter(([name]) => name !== e.name)
                                       .map(([name]) => (

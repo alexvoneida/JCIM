@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { canFillRole, formatRoles, parseRoles } from './roles'
+import { canFillRole, formatRoles, parseRoles, sharedTags } from './roles'
 
 it('parses roles with optional tags and places', () => {
   expect(parseRoles('Engineering: 2, HR [Human Resources, Business]: 1, Front Desk')).toEqual({
@@ -25,4 +25,13 @@ it('lets anyone fill a general place but needs a matching interest for a titled 
   expect(canFillRole(['human  resources'], hr)).toBe(true)
   expect(canFillRole(['Engineering'], hr)).toBe(false)
   expect(canFillRole(undefined, hr)).toBe(false)
+})
+
+it('lists the role tags a student shares, ignoring case and spacing', () => {
+  const role = { tags: ['Human Resources', 'Business', 'Finance'] }
+  expect(sharedTags(['finance', ' human  resources', 'Art'], role)).toEqual([
+    'Human Resources',
+    'Finance'
+  ])
+  expect(sharedTags(undefined, role)).toEqual([])
 })

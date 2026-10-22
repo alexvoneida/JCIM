@@ -42,11 +42,10 @@ function addEdge(graph: Edge[][], from: number, to: number, capacity: number, co
 export function matchInternships(input: MatchingInput): MatchingResult {
   const { studentRatings, roles } = input
 
-  // Every student who has submitted ratings is considered for matching.
+
   const students = Array.from(studentRatings.keys())
 
-  // Create graph nodes:
-  // source -> students -> job roles -> sink
+//create graph nodes for the algorithm
   const source = 0
   const studentStart = 1
   const roleStart = studentStart + students.length
@@ -58,17 +57,16 @@ export function matchInternships(input: MatchingInput): MatchingResult {
 
   const roleIndex = new Map(roles.map((role, i) => [role.id, roleStart + i]))
 
-  // Duplicate ids would silently merge two roles into one graph node.
+
   if (roleIndex.size !== roles.length) {
     throw new Error('Each job role must have a unique id.')
   }
 
-  // Each student can receive at most one internship.
+  //only one internship per student max
   for (const student of students) {
     addEdge(graph, source, studentIndex.get(student)!, 1, 0)
   }
 
-  // Keep track of edges representing possible assignments.
   const assignmentEdges: {
     student: string
     company: string
@@ -77,14 +75,11 @@ export function matchInternships(input: MatchingInput): MatchingResult {
     edge: Edge
   }[] = []
 
-  // Connect students to roles they are eligible for.
   for (const student of students) {
     const ratings = studentRatings.get(student)!
 
     for (const role of roles) {
-      // Both sides must want the match: the company approved the student,
-      // the student rated the company, and if the role has a specific
-      // title, one of the student's interests matches the role's tags.
+      //check that students can go in that role
       if (!canFill(input, student, role)) {
         continue
       }
@@ -112,20 +107,12 @@ export function matchInternships(input: MatchingInput): MatchingResult {
   }
 
   // Each job role has its own hiring capacity.
-  // For example, a company can hire one HR intern
-  // and one engineering intern if each role has capacity 1.
   for (const role of roles) {
     const capacity = Math.max(0, Math.floor(role.capacity))
 
     addEdge(graph, roleIndex.get(role.id)!, sink, capacity, 0)
   }
 
-  // Repeatedly find the cheapest available path from
-  // the source to the sink using Bellman-Ford.
-  //
-  // Reverse edges allow the algorithm to undo and
-  // rearrange earlier assignments when that improves
-  // the overall matching.
   while (true) {
     const distance = Array(graph.length).fill(Infinity) as number[]
 
@@ -146,7 +133,6 @@ export function matchInternships(input: MatchingInput): MatchingResult {
         for (let edgeIndex = 0; edgeIndex < graph[from].length; edgeIndex++) {
           const edge = graph[from][edgeIndex]
 
-          // Skip edges that cannot carry more flow.
           if (edge.capacity <= 0) {
             continue
           }
@@ -167,15 +153,10 @@ export function matchInternships(input: MatchingInput): MatchingResult {
       }
     }
 
-    // No path remains, so no additional students
-    // can be assigned without breaking capacity limits.
     if (previousNode[sink] === -1) {
       break
     }
 
-    // Send one student through the path.
-    // Update reverse edges so earlier assignments
-    // can be changed if a better matching is found.
     for (let node = sink; node !== source; node = previousNode[node]) {
       const from = previousNode[node]
       const edge = graph[from][previousEdge[node]]
@@ -185,8 +166,6 @@ export function matchInternships(input: MatchingInput): MatchingResult {
     }
   }
 
-  // An assignment edge with zero remaining capacity
-  // is currently being used in the final matching.
   const assignments: Assignment[] = assignmentEdges
     .filter(({ edge }) => edge.capacity === 0)
     .map(({ student, company, role, rating }) => ({
@@ -196,12 +175,10 @@ export function matchInternships(input: MatchingInput): MatchingResult {
       rating
     }))
 
-  // Find students who did not receive an internship.
   const matchedStudents = new Set(assignments.map((assignment) => assignment.student))
 
   const unmatchedStudents = students.filter((student) => !matchedStudents.has(student))
 
-  // Add up the ratings for all final assignments.
   const totalRating = assignments.reduce((total, assignment) => total + assignment.rating, 0)
 
   return {
