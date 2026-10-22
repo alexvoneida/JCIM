@@ -42,10 +42,9 @@ function addEdge(graph: Edge[][], from: number, to: number, capacity: number, co
 export function matchInternships(input: MatchingInput): MatchingResult {
   const { studentRatings, roles } = input
 
-
   const students = Array.from(studentRatings.keys())
 
-//create graph nodes for the algorithm
+  //create graph nodes for the algorithm
   const source = 0
   const studentStart = 1
   const roleStart = studentStart + students.length
@@ -56,7 +55,6 @@ export function matchInternships(input: MatchingInput): MatchingResult {
   const studentIndex = new Map(students.map((student, i) => [student, studentStart + i]))
 
   const roleIndex = new Map(roles.map((role, i) => [role.id, roleStart + i]))
-
 
   if (roleIndex.size !== roles.length) {
     throw new Error('Each job role must have a unique id.')
