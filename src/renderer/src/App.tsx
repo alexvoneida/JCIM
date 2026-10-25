@@ -314,9 +314,6 @@ export default function App() {
   const active = data.employers.filter((e) => e.active)
   const input = matchingInput(data)
   const matchingFeedback = latestFeedback(data)
-  // Only students the employer approved are listed under that employer.
-  const approvedFeedback = (company: string) =>
-    matchingFeedback.filter((i) => i.business === company && i.employerAccept === true)
   const result = {
     assignments: data.placements,
     unmatchedStudents: students
@@ -324,36 +321,39 @@ export default function App() {
       .filter((name) => !data.placements.some((p) => p.student === name)),
     totalRating: data.placements.reduce((sum, p) => sum + p.rating, 0)
   }
-  // One column per role. Employers without roles keep a single column. Approved
-  // students whose interests fit none of an employer's roles get their own column.
+  // One column per role. Employers without roles keep a single column. Students
+  // whose interests fit none of an employer's roles get their own column.
   const matchingColumns = active.flatMap((e) => {
-    const approved = approvedFeedback(e.name)
+    const interviewed = matchingFeedback.filter((i) => i.business === e.name)
     const fits = (student: string, role: { title: string | null; tags: string[] }) =>
       canFillRole(data.students[student]?.interests, role)
     const roles = employerRoles(e)
     const columns: {
       key: string
+      kind: 'role' | 'unfit'
       employer: Employer
       title: string | null
       tags: string[]
-      // Undefined for the column of approved students who fit no role.
-      capacity?: number
-      cards: typeof approved
+      capacity: number
+      cards: typeof interviewed
     }[] = roles.map((role) => ({
-      key: JSON.stringify([e.name, role.title]),
+      key: JSON.stringify([e.name, 'role', role.title]),
+      kind: 'role',
       employer: e,
       title: role.title,
       tags: role.tags,
       capacity: role.capacity,
-      cards: approved.filter((i) => fits(i.student, role))
+      cards: interviewed.filter((i) => fits(i.student, role))
     }))
-    const unfit = approved.filter((i) => !roles.some((role) => fits(i.student, role)))
+    const unfit = interviewed.filter((i) => !roles.some((role) => fits(i.student, role)))
     if (unfit.length)
       columns.push({
         key: JSON.stringify([e.name, 'unfit']),
+        kind: 'unfit',
         employer: e,
         title: null,
         tags: [],
+        capacity: 0,
         cards: unfit
       })
     return columns
@@ -507,6 +507,16 @@ export default function App() {
     })
     setEmployerForm(null)
   }
+  // Interests decide which roles a student can fill, so changing them invalidates the matching.
+  function placementsAfterInterestChange(students: Workspace['students']) {
+    const changed = Object.entries(students).some(
+      ([name, s]) =>
+        JSON.stringify(s.interests ?? []) !== JSON.stringify(data.students[name]?.interests ?? [])
+    )
+    return changed
+      ? { placements: [], matchingApproved: false }
+      : { placements: data.placements, matchingApproved: data.matchingApproved }
+  }
   function saveStudentIndustries(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!studentDetail) return
@@ -516,7 +526,8 @@ export default function App() {
       return
     }
     const student = { ...data.students[studentDetail.name], interests: selected.values } as Student
-    commit({ ...data, students: { ...data.students, [student.name]: student } })
+    const students = { ...data.students, [student.name]: student }
+    commit({ ...data, students, ...placementsAfterInterestChange(students) })
     setStudentDetail(student)
     setFormError('')
   }
@@ -533,7 +544,8 @@ export default function App() {
       ...data,
       industries: data.industries?.filter(other),
       employers: data.employers.map((e) => (other(e.industry) ? e : { ...e, industry: '' })),
-      students
+      students,
+      ...placementsAfterInterestChange(students)
     })
     if (studentDetail) setStudentDetail(students[studentDetail.name])
     if (!other(interest)) setInterest('')
@@ -1027,178 +1039,178 @@ export default function App() {
                 </Empty>
               ) : (
                 <div className="company-columns">
-                  {matchingColumns.map(({ key, employer: e, title, tags, capacity, cards }) => {
-                    const unfit = capacity === undefined
-                    // Labels name the role so a student listed under two roles stays distinct.
-                    const where = `${e.name}${title ? ` (${title})` : unfit ? ' (no matching role)' : ''}`
-                    return (
-                      <section
-                        className={`company-column ${title ? 'role-column' : ''} ${unfit ? 'unfit-column' : ''}`}
-                        key={key}
-                      >
-                        <div className="company-heading">
-                          <h2>{e.name}</h2>
-                          {title && <p className="role-name">{title}</p>}
-                          {unfit ? (
-                            <p>Approved, but interests match no role</p>
-                          ) : (
-                            <p>
-                              {
-                                data.placements.filter(
-                                  (p) => p.company === e.name && sameRole(p.role, title)
-                                ).length
-                              }{' '}
-                              of {capacity} filled
+                  {matchingColumns.map(
+                    ({ key, kind, employer: e, title, tags, capacity, cards }) => {
+                      const unfit = kind === 'unfit'
+                      // Labels name the role so a student listed under two roles stays distinct.
+                      const where = `${e.name}${title ? ` (${title})` : unfit ? ' (no matching role)' : ''}`
+                      return (
+                        <section
+                          className={`company-column ${title ? 'role-column' : ''} ${unfit ? 'unfit-column' : ''}`}
+                          key={key}
+                        >
+                          <div className="company-heading">
+                            <h2>{e.name}</h2>
+                            {title && <p className="role-name">{title}</p>}
+                            {unfit ? (
+                              <p>Interests match no role</p>
+                            ) : (
+                              <p>
+                                {
+                                  data.placements.filter(
+                                    (p) => p.company === e.name && sameRole(p.role, title)
+                                  ).length
+                                }{' '}
+                                of {capacity} filled
+                              </p>
+                            )}
+                          </div>
+                          {[...cards]
+                            .sort((a, b) => b.rank - a.rank)
+                            .map((i) => {
+                              const selected =
+                                !unfit &&
+                                data.placements.some(
+                                  (p) =>
+                                    p.student === i.student &&
+                                    p.company === e.name &&
+                                    sameRole(p.role, title)
+                                )
+                              return (
+                                <article
+                                  className={`feedback-card ${selected ? 'selected' : ''} ${i.employerAccept ? '' : i.employerAccept === false ? 'declined' : 'pending'}`}
+                                  key={`${i.student}-${i.index}`}
+                                >
+                                  <div className="feedback-heading">
+                                    <h3>{i.student}</h3>
+                                    <span
+                                      className="rating"
+                                      aria-label={`Student rating ${preference(i) ?? 'not rated'}`}
+                                    >
+                                      {preference(i) ? `${preference(i)}/5` : 'Not rated'}
+                                    </span>
+                                  </div>
+                                  <div className="feedback-status">
+                                    <span
+                                      className={`feedback-state ${i.employerAccept ? 'approved' : i.employerAccept === false ? 'declined' : ''}`}
+                                    >
+                                      {i.employerAccept
+                                        ? 'Employer approved'
+                                        : i.employerAccept === false
+                                          ? 'Employer declined'
+                                          : 'Feedback pending'}
+                                    </span>
+                                    {selected && (
+                                      <span className="matched-label">
+                                        <Icon name="check" />
+                                        Matched
+                                      </span>
+                                    )}
+                                  </div>
+                                  {editMatching && (
+                                    <div className="feedback-edit">
+                                      <label>
+                                        Student rating
+                                        <select
+                                          aria-label={`Student rating for ${i.student} at ${where}`}
+                                          value={preference(i) ?? ''}
+                                          onChange={(event) =>
+                                            updateFeedback(i.student, i.index, {
+                                              rank: Number(event.target.value)
+                                            })
+                                          }
+                                        >
+                                          <option value="">Not rated</option>
+                                          {[1, 2, 3, 4, 5].map((n) => (
+                                            <option key={n} value={n}>
+                                              {n} / 5
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <label>
+                                        Employer response
+                                        <select
+                                          aria-label={`Employer response for ${i.student} at ${where}`}
+                                          value={
+                                            i.employerAccept === undefined
+                                              ? ''
+                                              : i.employerAccept
+                                                ? 'yes'
+                                                : 'no'
+                                          }
+                                          onChange={(event) =>
+                                            updateFeedback(i.student, i.index, {
+                                              employerAccept:
+                                                event.target.value === ''
+                                                  ? undefined
+                                                  : event.target.value === 'yes'
+                                            })
+                                          }
+                                        >
+                                          <option value="">Pending</option>
+                                          <option value="yes">Approved</option>
+                                          <option value="no">Declined</option>
+                                        </select>
+                                      </label>
+                                    </div>
+                                  )}
+                                  {selected && (
+                                    <details className="placement-explanation">
+                                      <summary>Why this placement?</summary>
+                                      <p>
+                                        {i.student} rated {e.name} {i.rank}/5 and was approved by
+                                        the employer.
+                                      </p>
+                                      {title &&
+                                        (() => {
+                                          const shared = sharedTags(
+                                            data.students[i.student]?.interests,
+                                            { tags }
+                                          )
+                                          return (
+                                            <p>
+                                              {i.student} and the {title} role both share the tag
+                                              {shared.length === 1 ? '' : 's'}{' '}
+                                              {shared.map((t, n) => (
+                                                <span key={t}>
+                                                  {n > 0 &&
+                                                    (n === shared.length - 1 ? ' and ' : ', ')}
+                                                  <strong>{t}</strong>
+                                                </span>
+                                              ))}
+                                              .
+                                            </p>
+                                          )
+                                        })()}
+                                      {[...(input.studentRatings.get(i.student) ?? [])]
+                                        .filter(([name]) => name !== e.name)
+                                        .map(([name]) => (
+                                          <p key={name}>
+                                            <strong>{name}:</strong>{' '}
+                                            {explainAlternative(input, result, i.student, name)}
+                                          </p>
+                                        ))}
+                                    </details>
+                                  )}
+                                  {i.employerNotes && (
+                                    <details className="placement-explanation">
+                                      <summary>Employer notes</summary>
+                                      <p>{i.employerNotes}</p>
+                                    </details>
+                                  )}
+                                </article>
+                              )
+                            })}
+                          {!cards.length && (
+                            <p className="column-empty">
+                              {title ? 'No students match this role yet.' : 'No students yet.'}
                             </p>
                           )}
-                        </div>
-                        {[...cards]
-                          .sort((a, b) => b.rank - a.rank)
-                          .map((i) => {
-                            const selected =
-                              !unfit &&
-                              data.placements.some(
-                                (p) =>
-                                  p.student === i.student &&
-                                  p.company === e.name &&
-                                  sameRole(p.role, title)
-                              )
-                            return (
-                              <article
-                                className={`feedback-card ${selected ? 'selected' : ''}`}
-                                key={`${i.student}-${i.index}`}
-                              >
-                                <div className="feedback-heading">
-                                  <h3>{i.student}</h3>
-                                  <span
-                                    className="rating"
-                                    aria-label={`Student rating ${preference(i) ?? 'not rated'}`}
-                                  >
-                                    {preference(i) ? `${preference(i)}/5` : 'Not rated'}
-                                  </span>
-                                </div>
-                                <div className="feedback-status">
-                                  <span
-                                    className={`feedback-state ${i.employerAccept ? 'approved' : i.employerAccept === false ? 'declined' : ''}`}
-                                  >
-                                    {i.employerAccept
-                                      ? 'Employer approved'
-                                      : i.employerAccept === false
-                                        ? 'Employer declined'
-                                        : 'Feedback pending'}
-                                  </span>
-                                  {selected && (
-                                    <span className="matched-label">
-                                      <Icon name="check" />
-                                      Matched
-                                    </span>
-                                  )}
-                                </div>
-                                {editMatching && (
-                                  <div className="feedback-edit">
-                                    <label>
-                                      Student rating
-                                      <select
-                                        aria-label={`Student rating for ${i.student} at ${where}`}
-                                        value={preference(i) ?? ''}
-                                        onChange={(event) =>
-                                          updateFeedback(i.student, i.index, {
-                                            rank: Number(event.target.value)
-                                          })
-                                        }
-                                      >
-                                        <option value="">Not rated</option>
-                                        {[1, 2, 3, 4, 5].map((n) => (
-                                          <option key={n} value={n}>
-                                            {n} / 5
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
-                                    <label>
-                                      Employer response
-                                      <select
-                                        aria-label={`Employer response for ${i.student} at ${where}`}
-                                        value={
-                                          i.employerAccept === undefined
-                                            ? ''
-                                            : i.employerAccept
-                                              ? 'yes'
-                                              : 'no'
-                                        }
-                                        onChange={(event) =>
-                                          updateFeedback(i.student, i.index, {
-                                            employerAccept:
-                                              event.target.value === ''
-                                                ? undefined
-                                                : event.target.value === 'yes'
-                                          })
-                                        }
-                                      >
-                                        <option value="">Pending</option>
-                                        <option value="yes">Approved</option>
-                                        <option value="no">Declined</option>
-                                      </select>
-                                    </label>
-                                  </div>
-                                )}
-                                {selected && (
-                                  <details className="placement-explanation">
-                                    <summary>Why this placement?</summary>
-                                    <p>
-                                      {i.student} rated {e.name} {i.rank}/5 and was approved by the
-                                      employer.
-                                    </p>
-                                    {title &&
-                                      (() => {
-                                        const shared = sharedTags(
-                                          data.students[i.student]?.interests,
-                                          { tags }
-                                        )
-                                        return (
-                                          <p>
-                                            {i.student} and the {title} role both share the tag
-                                            {shared.length === 1 ? '' : 's'}{' '}
-                                            {shared.map((t, n) => (
-                                              <span key={t}>
-                                                {n > 0 &&
-                                                  (n === shared.length - 1 ? ' and ' : ', ')}
-                                                <strong>{t}</strong>
-                                              </span>
-                                            ))}
-                                            .
-                                          </p>
-                                        )
-                                      })()}
-                                    {[...(input.studentRatings.get(i.student) ?? [])]
-                                      .filter(([name]) => name !== e.name)
-                                      .map(([name]) => (
-                                        <p key={name}>
-                                          <strong>{name}:</strong>{' '}
-                                          {explainAlternative(input, result, i.student, name)}
-                                        </p>
-                                      ))}
-                                  </details>
-                                )}
-                                {i.employerNotes && (
-                                  <details className="placement-explanation">
-                                    <summary>Employer notes</summary>
-                                    <p>{i.employerNotes}</p>
-                                  </details>
-                                )}
-                              </article>
-                            )
-                          })}
-                        {!cards.length && (
-                          <p className="column-empty">
-                            {title
-                              ? 'No approved students match this role yet.'
-                              : 'No approved students yet.'}
-                          </p>
-                        )}
-                      </section>
-                    )
-                  })}
+                        </section>
+                      )
+                    }
+                  )}
                 </div>
               )}
             </section>
