@@ -555,6 +555,15 @@ p {
   font-size: 10px;
   line-height: 1.4;
 }
+.company-heading .role-name {
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+.unfit-column {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+}
 .feedback-card {
   background: #fff;
   border: 1px solid var(--border);
@@ -603,6 +612,16 @@ p {
 .feedback-card.selected {
   background: var(--accent-soft);
   border-color: var(--accent-border);
+}
+.feedback-card.pending,
+.feedback-card.declined {
+  border-style: dashed;
+}
+.feedback-card.pending {
+  border-color: var(--border-strong);
+}
+.feedback-card.declined {
+  border-color: var(--danger-border);
 }
 .feedback-state {
   font-size: 11px;

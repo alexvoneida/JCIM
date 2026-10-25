@@ -391,6 +391,9 @@ it('invalidates matches when feedback changes and enforces internship capacity f
     target: { value: 'no' }
   })
   expect(screen.getByLabelText('Placement for Alice')).toHaveValue('')
+  // A declined student stays listed, so the response can still be changed.
+  expect(screen.getByLabelText('Employer response for Alice at Aero')).toHaveValue('no')
+  expect(screen.getByText('Employer declined').closest('article')).toHaveClass('declined')
   expect(screen.getByRole('button', { name: 'Approve matching' })).toBeDisabled()
   fireEvent.change(screen.getByLabelText('Placement for Bob'), { target: { value: 'Aero' } })
   expect(screen.getByLabelText('Placement for Bob')).toHaveValue('Aero')
@@ -456,4 +459,83 @@ it('removes an industry from students, employers, filters, and the saved option 
   ).toEqual(['All interests'])
   fireEvent.click(screen.getByRole('button', { name: 'Employers' }))
   expect(screen.queryByText('Aerospace')).not.toBeInTheDocument()
+})
+
+it('shows a matching column for each role with the approved students who fit it', async () => {
+  const data = fixture()
+  data.employers[0] = {
+    ...data.employers[0],
+    capacity: 2,
+    roles: [
+      { title: 'Engineering', capacity: 1 },
+      { title: 'HR', capacity: 1, tags: ['Human Resources'] }
+    ]
+  }
+  for (const [name, interests] of [
+    ['Bob', ['Human Resources']],
+    ['Cara', ['Art']]
+  ] as const) {
+    data.students[name] = Object.assign(new Student(), { name, interests: [...interests] })
+    const interview = new InterviewResult(name, '1', 'Aero', '', '', '', 'Yes', '4')
+    interview.employerAccept = true
+    data.students[name].interviewResults.push(interview)
+  }
+  vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  const column = (text: string) =>
+    screen.getByText(text, { selector: '.company-heading p' }).closest('section')!
+  const names = (section: HTMLElement) =>
+    within(section)
+      .getAllByRole('heading', { level: 3 })
+      .map((h) => h.textContent)
+  expect(names(column('Engineering'))).toEqual(['Alice'])
+  expect(names(column('HR'))).toEqual(['Bob'])
+  expect(names(column('Interests match no role'))).toEqual(['Cara'])
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  expect(within(column('Engineering')).getByText('1 of 1 filled')).toBeInTheDocument()
+  expect(within(column('HR')).getByText('1 of 1 filled')).toBeInTheDocument()
+})
+
+it('lists pending students so the employer response can be set', async () => {
+  const data = fixture()
+  data.students.Alice.interviewResults[0].employerAccept = undefined
+  vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  const card = screen.getByText('Feedback pending').closest('article')!
+  expect(card).toHaveClass('pending')
+  fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
+  fireEvent.change(screen.getByLabelText('Employer response for Alice at Aero'), {
+    target: { value: 'yes' }
+  })
+  expect(screen.getByText('Employer approved').closest('article')).not.toHaveClass('pending')
+})
+
+it('clears placements when a placed student’s interests change', async () => {
+  const data = fixture()
+  data.employers[0] = { ...data.employers[0], roles: [{ title: 'Engineering', capacity: 1 }] }
+  vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  expect(screen.getByText('1 of 1 filled')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Students' }))
+  fireEvent.click(screen.getByRole('heading', { name: 'Alice' }))
+  const studentModal = screen.getByRole('dialog', { name: 'Alice' })
+  fireEvent.click(
+    within(studentModal).getByRole('button', { name: 'Remove Engineering from all industries' })
+  )
+  fireEvent.click(
+    within(screen.getByRole('dialog', { name: 'Remove “Engineering”?' })).getByRole('button', {
+      name: 'Remove industry'
+    })
+  )
+  fireEvent.click(within(studentModal).getByRole('button', { name: 'Done' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
+  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
+  expect(vi.mocked(window.api.exportSheet).mock.calls[0][0].placements).toEqual([])
 })

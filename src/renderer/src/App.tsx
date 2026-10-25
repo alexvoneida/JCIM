@@ -13,7 +13,16 @@ import IndustryPicker, { OTHER_INDUSTRY } from './IndustryPicker'
 import type { Student } from '../../shared/student'
 import { InterviewResult } from '../../shared/interviewResult'
 import { generateSchedule, latestFeedback, matchingInput, preference } from './workspace-flow'
-import { matchInternships } from './matching'
+import { canFill, matchInternships } from './matching'
+import {
+  canFillRole,
+  employerCapacity,
+  employerRoles,
+  formatRoles,
+  parseRoles,
+  sameRole,
+  sharedTags
+} from '../../shared/roles'
 import { explainAlternative } from './placement-explanation'
 
 type Page = 'overview' | 'schedule' | 'matching' | 'employers'
@@ -201,6 +210,17 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
           typeof e.active === 'boolean' &&
           Number.isSafeInteger(e.capacity) &&
           e.capacity >= 0 &&
+          (e.roles === undefined ||
+            (Array.isArray(e.roles) &&
+              e.roles.every(
+                (r) =>
+                  r &&
+                  typeof r.title === 'string' &&
+                  (r.tags === undefined ||
+                    (Array.isArray(r.tags) && r.tags.every((t) => typeof t === 'string'))) &&
+                  Number.isSafeInteger(r.capacity) &&
+                  r.capacity >= 0
+              ))) &&
           (!e.scheduling ||
             ((e.scheduling.start === undefined || typeof e.scheduling.start === 'string') &&
               (e.scheduling.end === undefined || typeof e.scheduling.end === 'string') &&
@@ -250,7 +270,8 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
           value.employers.some((e) => e.name === p.company && e.active) &&
           Number.isSafeInteger(p.rating) &&
           p.rating >= 1 &&
-          p.rating <= 5
+          p.rating <= 5 &&
+          (p.role === undefined || p.role === null || typeof p.role === 'string')
       )
     )
       throw new Error('The saved data is damaged or in an unsupported format.')
@@ -300,6 +321,43 @@ export default function App() {
       .filter((name) => !data.placements.some((p) => p.student === name)),
     totalRating: data.placements.reduce((sum, p) => sum + p.rating, 0)
   }
+  // One column per role. Employers without roles keep a single column. Students
+  // whose interests fit none of an employer's roles get their own column.
+  const matchingColumns = active.flatMap((e) => {
+    const interviewed = matchingFeedback.filter((i) => i.business === e.name)
+    const fits = (student: string, role: { title: string | null; tags: string[] }) =>
+      canFillRole(data.students[student]?.interests, role)
+    const roles = employerRoles(e)
+    const columns: {
+      key: string
+      kind: 'role' | 'unfit'
+      employer: Employer
+      title: string | null
+      tags: string[]
+      capacity: number
+      cards: typeof interviewed
+    }[] = roles.map((role) => ({
+      key: JSON.stringify([e.name, 'role', role.title]),
+      kind: 'role',
+      employer: e,
+      title: role.title,
+      tags: role.tags,
+      capacity: role.capacity,
+      cards: interviewed.filter((i) => fits(i.student, role))
+    }))
+    const unfit = interviewed.filter((i) => !roles.some((role) => fits(i.student, role)))
+    if (unfit.length)
+      columns.push({
+        key: JSON.stringify([e.name, 'unfit']),
+        kind: 'unfit',
+        employer: e,
+        title: null,
+        tags: [],
+        capacity: 0,
+        cards: unfit
+      })
+    return columns
+  })
   const feedback = students.flatMap((s) =>
     s.interviewResults.map((i, index) => ({ ...i, index, student: s.name }))
   )
@@ -414,7 +472,13 @@ export default function App() {
       setFormError(`An employer named “${name}” already exists.`)
       return
     }
-    if (!capacityValue || !Number.isSafeInteger(capacity) || capacity < 0) {
+    const parsedRoles = parseRoles(formValue(form, 'roles'))
+    if (parsedRoles.error) {
+      setFormError(parsedRoles.error)
+      return
+    }
+    const roles = parsedRoles.roles
+    if (!roles.length && (!capacityValue || !Number.isSafeInteger(capacity) || capacity < 0)) {
       setFormError('Capacity must be a whole number of 0 or more.')
       return
     }
@@ -426,7 +490,9 @@ export default function App() {
     const employer = {
       name,
       industry: selectedIndustry.values[0] ?? '',
-      capacity,
+      // Listed roles set the total capacity.
+      capacity: roles.length ? roles.reduce((sum, r) => sum + r.capacity, 0) : capacity,
+      roles: roles.length ? roles : undefined,
       active: employerForm === 'new' ? true : employerForm!.active,
       scheduling: employerForm === 'new' ? undefined : employerForm!.scheduling
     }
@@ -441,6 +507,16 @@ export default function App() {
     })
     setEmployerForm(null)
   }
+  // Interests decide which roles a student can fill, so changing them invalidates the matching.
+  function placementsAfterInterestChange(students: Workspace['students']) {
+    const changed = Object.entries(students).some(
+      ([name, s]) =>
+        JSON.stringify(s.interests ?? []) !== JSON.stringify(data.students[name]?.interests ?? [])
+    )
+    return changed
+      ? { placements: [], matchingApproved: false }
+      : { placements: data.placements, matchingApproved: data.matchingApproved }
+  }
   function saveStudentIndustries(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!studentDetail) return
@@ -450,7 +526,8 @@ export default function App() {
       return
     }
     const student = { ...data.students[studentDetail.name], interests: selected.values } as Student
-    commit({ ...data, students: { ...data.students, [student.name]: student } })
+    const students = { ...data.students, [student.name]: student }
+    commit({ ...data, students, ...placementsAfterInterestChange(students) })
     setStudentDetail(student)
     setFormError('')
   }
@@ -467,7 +544,8 @@ export default function App() {
       ...data,
       industries: data.industries?.filter(other),
       employers: data.employers.map((e) => (other(e.industry) ? e : { ...e, industry: '' })),
-      students
+      students,
+      ...placementsAfterInterestChange(students)
     })
     if (studentDetail) setStudentDetail(students[studentDetail.name])
     if (!other(interest)) setInterest('')
@@ -503,7 +581,7 @@ export default function App() {
     }
   }
   function generateMatches() {
-    if (!active.some((e) => e.capacity > 0)) {
+    if (!active.some((e) => employerCapacity(e) > 0)) {
       showError({
         title: 'No capacity available',
         detail: 'No active employer has capacity set.',
@@ -548,23 +626,31 @@ export default function App() {
     if (!rating || !input.companyLikes.get(employer)?.includes(student)) {
       showError({
         title: 'Placement not eligible',
-        detail: `${student} needs employer approval and a rating for ${employer}, and must not have declined.`
+        detail: `${student} needs employer approval and a rating for ${employer}.`
       })
       return
     }
-    if (
-      remaining.filter((p) => p.company === employer).length >=
-      (input.companyCapacities.get(employer) ?? 0)
-    ) {
+    // Use the first role this student fits that still has a free place.
+    const fitting = input.roles.filter((r) => r.company === employer && canFill(input, student, r))
+    const role = fitting.find(
+      (r) =>
+        remaining.filter((p) => p.company === employer && sameRole(p.role, r.title)).length <
+        r.capacity
+    )
+    if (!role) {
       showError({
         title: 'Employer is full',
-        detail: `${employer} has reached its capacity.`
+        detail: !fitting.length
+          ? `${employer} has no role that matches ${student}’s interests.`
+          : fitting.every((r) => r.title === null)
+            ? `${employer} has reached its capacity.`
+            : `${employer} has no free place in a role that fits ${student}.`
       })
       return
     }
     commit({
       ...data,
-      placements: [...remaining, { student, company: employer, rating }],
+      placements: [...remaining, { student, company: employer, role: role.title, rating }],
       matchingApproved: false
     })
   }
@@ -818,8 +904,8 @@ export default function App() {
                 <div>
                   <strong>{data.employers.length} employers</strong>
                   <span className="muted">
-                    {active.length} active · {active.reduce((n, e) => n + e.capacity, 0)} total
-                    capacity
+                    {active.length} active · {active.reduce((n, e) => n + employerCapacity(e), 0)}{' '}
+                    total capacity
                   </span>
                 </div>
                 <div className="filters">
@@ -868,14 +954,17 @@ export default function App() {
                       <div className="employer-numbers">
                         <div>
                           <span>Capacity</span>
-                          <strong>{e.capacity}</strong>
+                          <strong>{employerCapacity(e)}</strong>
                         </div>
                         <div>
                           <span>Interviews</span>
                           <strong>{feedback.filter((i) => i.business === e.name).length}</strong>
                         </div>
                       </div>
-                      {e.capacity === 0 && e.active && (
+                      {!!e.roles?.length && (
+                        <p className="capacity-note">Roles: {formatRoles(e.roles)}</p>
+                      )}
+                      {employerCapacity(e) === 0 && e.active && (
                         <p className="capacity-note">No capacity set</p>
                       )}
                       <div className="employer-bottom">
@@ -932,9 +1021,9 @@ export default function App() {
               <summary>How matching works</summary>
               <p>
                 Each student is placed with at most one active employer, within that employer’s
-                capacity. A placement requires employer approval and a student rating, and the
-                student must not have declined. Matching places as many students as possible, then
-                maximizes the total of student ratings (1–5).
+                capacity. A placement requires employer approval and a student rating. Students do
+                not decline; a low rating (1/5) means less interest. Matching places as many
+                students as possible, then maximizes the total of student ratings (1–5).
               </p>
             </details>
             <section className="board">
@@ -950,160 +1039,178 @@ export default function App() {
                 </Empty>
               ) : (
                 <div className="company-columns">
-                  {active.map((e) => (
-                    <section className="company-column" key={e.name}>
-                      <div className="company-heading">
-                        <h2>{e.name}</h2>
-                        <p>
-                          {data.placements.filter((p) => p.company === e.name).length} of{' '}
-                          {e.capacity} filled
-                        </p>
-                      </div>
-                      {matchingFeedback
-                        .filter((i) => i.business === e.name)
-                        .sort((a, b) => b.rank - a.rank)
-                        .map((i) => {
-                          const selected = data.placements.some(
-                            (p) => p.student === i.student && p.company === e.name
-                          )
-                          return (
-                            <article
-                              className={`feedback-card ${selected ? 'selected' : ''}`}
-                              key={`${i.student}-${i.index}`}
-                            >
-                              <div className="feedback-heading">
-                                <h3>{i.student}</h3>
-                                <span
-                                  className="rating"
-                                  aria-label={`Student rating ${preference(i) ?? 'not rated'}`}
+                  {matchingColumns.map(
+                    ({ key, kind, employer: e, title, tags, capacity, cards }) => {
+                      const unfit = kind === 'unfit'
+                      // Labels name the role so a student listed under two roles stays distinct.
+                      const where = `${e.name}${title ? ` (${title})` : unfit ? ' (no matching role)' : ''}`
+                      return (
+                        <section
+                          className={`company-column ${title ? 'role-column' : ''} ${unfit ? 'unfit-column' : ''}`}
+                          key={key}
+                        >
+                          <div className="company-heading">
+                            <h2>{e.name}</h2>
+                            {title && <p className="role-name">{title}</p>}
+                            {unfit ? (
+                              <p>Interests match no role</p>
+                            ) : (
+                              <p>
+                                {
+                                  data.placements.filter(
+                                    (p) => p.company === e.name && sameRole(p.role, title)
+                                  ).length
+                                }{' '}
+                                of {capacity} filled
+                              </p>
+                            )}
+                          </div>
+                          {[...cards]
+                            .sort((a, b) => b.rank - a.rank)
+                            .map((i) => {
+                              const selected =
+                                !unfit &&
+                                data.placements.some(
+                                  (p) =>
+                                    p.student === i.student &&
+                                    p.company === e.name &&
+                                    sameRole(p.role, title)
+                                )
+                              return (
+                                <article
+                                  className={`feedback-card ${selected ? 'selected' : ''} ${i.employerAccept ? '' : i.employerAccept === false ? 'declined' : 'pending'}`}
+                                  key={`${i.student}-${i.index}`}
                                 >
-                                  {preference(i) ? `${preference(i)}/5` : 'Not rated'}
-                                </span>
-                              </div>
-                              <div className="feedback-status">
-                                <span
-                                  className={`feedback-state ${i.employerAccept ? 'approved' : i.employerAccept === false ? 'declined' : ''}`}
-                                >
-                                  {i.employerAccept
-                                    ? 'Employer approved'
-                                    : i.employerAccept === false
-                                      ? 'Employer declined'
-                                      : 'Feedback pending'}
-                                </span>
-                                {selected && (
-                                  <span className="matched-label">
-                                    <Icon name="check" />
-                                    Matched
-                                  </span>
-                                )}
-                              </div>
-                              {i.acceptance === false && (
-                                <p className="small danger">Student declined this employer</p>
-                              )}
-                              {editMatching && (
-                                <div className="feedback-edit">
-                                  <label>
-                                    Student rating
-                                    <select
-                                      aria-label={`Student rating for ${i.student} at ${e.name}`}
-                                      value={preference(i) ?? ''}
-                                      onChange={(event) =>
-                                        updateFeedback(i.student, i.index, {
-                                          rank: Number(event.target.value)
-                                        })
-                                      }
+                                  <div className="feedback-heading">
+                                    <h3>{i.student}</h3>
+                                    <span
+                                      className="rating"
+                                      aria-label={`Student rating ${preference(i) ?? 'not rated'}`}
                                     >
-                                      <option value="">Not rated</option>
-                                      {[1, 2, 3, 4, 5].map((n) => (
-                                        <option key={n} value={n}>
-                                          {n} / 5
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Employer response
-                                    <select
-                                      aria-label={`Employer response for ${i.student} at ${e.name}`}
-                                      value={
-                                        i.employerAccept === undefined
-                                          ? ''
-                                          : i.employerAccept
-                                            ? 'yes'
-                                            : 'no'
-                                      }
-                                      onChange={(event) =>
-                                        updateFeedback(i.student, i.index, {
-                                          employerAccept:
-                                            event.target.value === ''
-                                              ? undefined
-                                              : event.target.value === 'yes'
-                                        })
-                                      }
+                                      {preference(i) ? `${preference(i)}/5` : 'Not rated'}
+                                    </span>
+                                  </div>
+                                  <div className="feedback-status">
+                                    <span
+                                      className={`feedback-state ${i.employerAccept ? 'approved' : i.employerAccept === false ? 'declined' : ''}`}
                                     >
-                                      <option value="">Pending</option>
-                                      <option value="yes">Approved</option>
-                                      <option value="no">Declined</option>
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Student acceptance
-                                    <select
-                                      aria-label={`Student acceptance for ${i.student} at ${e.name}`}
-                                      value={
-                                        i.acceptance === undefined
-                                          ? ''
-                                          : i.acceptance
-                                            ? 'yes'
-                                            : 'no'
-                                      }
-                                      onChange={(event) =>
-                                        updateFeedback(i.student, i.index, {
-                                          acceptance:
-                                            event.target.value === ''
-                                              ? undefined
-                                              : event.target.value === 'yes'
-                                        })
-                                      }
-                                    >
-                                      <option value="">Not recorded</option>
-                                      <option value="yes">Yes</option>
-                                      <option value="no">No</option>
-                                    </select>
-                                  </label>
-                                </div>
-                              )}
-                              {selected && (
-                                <details className="placement-explanation">
-                                  <summary>Why this placement?</summary>
-                                  <p>
-                                    {i.student} rated {e.name} {i.rank}/5 and was approved by the
-                                    employer.
-                                  </p>
-                                  {[...(input.studentRatings.get(i.student) ?? [])]
-                                    .filter(([name]) => name !== e.name)
-                                    .map(([name]) => (
-                                      <p key={name}>
-                                        <strong>{name}:</strong>{' '}
-                                        {explainAlternative(input, result, i.student, name)}
+                                      {i.employerAccept
+                                        ? 'Employer approved'
+                                        : i.employerAccept === false
+                                          ? 'Employer declined'
+                                          : 'Feedback pending'}
+                                    </span>
+                                    {selected && (
+                                      <span className="matched-label">
+                                        <Icon name="check" />
+                                        Matched
+                                      </span>
+                                    )}
+                                  </div>
+                                  {editMatching && (
+                                    <div className="feedback-edit">
+                                      <label>
+                                        Student rating
+                                        <select
+                                          aria-label={`Student rating for ${i.student} at ${where}`}
+                                          value={preference(i) ?? ''}
+                                          onChange={(event) =>
+                                            updateFeedback(i.student, i.index, {
+                                              rank: Number(event.target.value)
+                                            })
+                                          }
+                                        >
+                                          <option value="">Not rated</option>
+                                          {[1, 2, 3, 4, 5].map((n) => (
+                                            <option key={n} value={n}>
+                                              {n} / 5
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <label>
+                                        Employer response
+                                        <select
+                                          aria-label={`Employer response for ${i.student} at ${where}`}
+                                          value={
+                                            i.employerAccept === undefined
+                                              ? ''
+                                              : i.employerAccept
+                                                ? 'yes'
+                                                : 'no'
+                                          }
+                                          onChange={(event) =>
+                                            updateFeedback(i.student, i.index, {
+                                              employerAccept:
+                                                event.target.value === ''
+                                                  ? undefined
+                                                  : event.target.value === 'yes'
+                                            })
+                                          }
+                                        >
+                                          <option value="">Pending</option>
+                                          <option value="yes">Approved</option>
+                                          <option value="no">Declined</option>
+                                        </select>
+                                      </label>
+                                    </div>
+                                  )}
+                                  {selected && (
+                                    <details className="placement-explanation">
+                                      <summary>Why this placement?</summary>
+                                      <p>
+                                        {i.student} rated {e.name} {i.rank}/5 and was approved by
+                                        the employer.
                                       </p>
-                                    ))}
-                                </details>
-                              )}
-                              {i.employerNotes && (
-                                <details className="placement-explanation">
-                                  <summary>Employer notes</summary>
-                                  <p>{i.employerNotes}</p>
-                                </details>
-                              )}
-                            </article>
-                          )
-                        })}
-                      {!matchingFeedback.some((i) => i.business === e.name) && (
-                        <p className="column-empty">No feedback yet.</p>
-                      )}
-                    </section>
-                  ))}
+                                      {title &&
+                                        (() => {
+                                          const shared = sharedTags(
+                                            data.students[i.student]?.interests,
+                                            { tags }
+                                          )
+                                          return (
+                                            <p>
+                                              {i.student} and the {title} role both share the tag
+                                              {shared.length === 1 ? '' : 's'}{' '}
+                                              {shared.map((t, n) => (
+                                                <span key={t}>
+                                                  {n > 0 &&
+                                                    (n === shared.length - 1 ? ' and ' : ', ')}
+                                                  <strong>{t}</strong>
+                                                </span>
+                                              ))}
+                                              .
+                                            </p>
+                                          )
+                                        })()}
+                                      {[...(input.studentRatings.get(i.student) ?? [])]
+                                        .filter(([name]) => name !== e.name)
+                                        .map(([name]) => (
+                                          <p key={name}>
+                                            <strong>{name}:</strong>{' '}
+                                            {explainAlternative(input, result, i.student, name)}
+                                          </p>
+                                        ))}
+                                    </details>
+                                  )}
+                                  {i.employerNotes && (
+                                    <details className="placement-explanation">
+                                      <summary>Employer notes</summary>
+                                      <p>{i.employerNotes}</p>
+                                    </details>
+                                  )}
+                                </article>
+                              )
+                            })}
+                          {!cards.length && (
+                            <p className="column-empty">
+                              {title ? 'No students match this role yet.' : 'No students yet.'}
+                            </p>
+                          )}
+                        </section>
+                      )
+                    }
+                  )}
                 </div>
               )}
             </section>
@@ -1205,6 +1312,22 @@ export default function App() {
               />
               <span className="field-help" id="capacity-help">
                 Number of interns this employer can take.
+              </span>
+            </label>
+            <label>
+              Roles (optional)
+              <input
+                name="roles"
+                aria-label="Roles"
+                aria-describedby="roles-help"
+                placeholder="Engineering: 2, HR [Human Resources]: 1"
+                defaultValue={employerForm === 'new' ? '' : formatRoles(employerForm.roles)}
+              />
+              <span className="field-help" id="roles-help">
+                List roles as Title [tags]: places, e.g. “Engineering: 2, HR [Human Resources]: 1”.
+                A student can only fill a role when one of their interests matches its tags (the
+                title, if no tags are given). Leave blank if any approved student can fill any
+                place. When roles are listed, capacity is their total.
               </span>
             </label>
             {formError && (
