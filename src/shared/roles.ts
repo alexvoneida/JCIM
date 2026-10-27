@@ -26,6 +26,14 @@ export function sameRole(a: string | null | undefined, b: string | null | undefi
   return normalizeRole(a ?? '') === normalizeRole(b ?? '')
 }
 
+// Same employer and role. Two missing placements (both unmatched) are also the same.
+export function samePlacement(
+  a: { company: string; role?: string | null } | undefined,
+  b: { company: string; role?: string | null } | undefined
+): boolean {
+  return a?.company === b?.company && sameRole(a?.role, b?.role)
+}
+
 // The employer only approves or declines a student. Which role they can fill
 // comes from the student's interests: general places take anyone, and a titled
 // role needs an interest that matches one of its tags.

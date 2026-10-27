@@ -44,7 +44,9 @@ it('prioritizes placement count over a higher individual preference and explains
     { student: 'Limited', company: 'A', role: null, rating: 4 }
   ])
   expect(result.totalRating).toBe(6)
-  expect(explainAlternative(input, result, 'Flexible', 'A')).toContain('1 fewer student matched')
+  expect(explainAlternative(input, result, 'Flexible', 'A')).toBe(
+    'Placing Flexible here would leave 1 other student without a placement.'
+  )
 })
 
 it('explains the score tradeoff when the placement count stays the same', () => {
@@ -54,7 +56,9 @@ it('explains the score tradeoff when the placement count stays the same', () => 
   input.studentRatings.get('Flexible')!.set('B', 5)
   const result = matchInternships(input)
   expect(result.totalRating).toBe(9)
-  expect(explainAlternative(input, result, 'Flexible', 'A')).toContain('3 points')
+  expect(explainAlternative(input, result, 'Flexible', 'A')).toBe(
+    'Flexible rated A the same (5/5), but placing Flexible here would lower other students’ ratings by 3 points in total.'
+  )
 })
 
 it('identifies equal solutions, zero capacity and ineligible alternatives without mutating inputs', () => {
@@ -62,12 +66,14 @@ it('identifies equal solutions, zero capacity and ineligible alternatives withou
   setCapacity(input, 'A', 2)
   input.studentRatings.get('Flexible')!.set('B', 5)
   const result = matchInternships(input)
-  expect(explainAlternative(input, result, 'Flexible', 'B')).toContain('equally optimal')
+  expect(explainAlternative(input, result, 'Flexible', 'B')).toBe(
+    'Flexible rated both 5/5. Either works, so the app picked one.'
+  )
   expect(input.studentRatings.size).toBe(2)
   expect(input.roles.find((r) => r.company === 'A')!.capacity).toBe(2)
-  expect(explainAlternative(input, result, 'Limited', 'B')).toContain('Not eligible')
+  expect(explainAlternative(input, result, 'Limited', 'B')).toContain('have not both approved')
   setCapacity(input, 'B', 0)
-  expect(explainAlternative(input, result, 'Flexible', 'B')).toContain('No places available')
+  expect(explainAlternative(input, result, 'Flexible', 'B')).toBe('B has no places.')
 })
 
 it('leaves students unmatched when no mutually approved option exists', () => {
@@ -123,7 +129,7 @@ it('never puts an approved engineer into the HR role, even when it is empty', ()
     { student: 'Eng1', company: 'Jeffco', role: 'Engineering', rating: 5 }
   ])
   expect(result.unmatchedStudents).toEqual(['Eng2'])
-  expect(explainAlternative(input, result, 'Eng2', 'Jeffco')).not.toContain('No role')
+  expect(explainAlternative(input, result, 'Eng2', 'Jeffco')).not.toContain('None of')
 })
 
 it('lets any approved student fill general places but not roles without a matching interest', () => {
@@ -139,11 +145,47 @@ it('lets any approved student fill general places but not roles without a matchi
     role: null,
     rating: 2
   })
-  expect(explainAlternative(input, result, 'People', 'Jeffco')).toContain('No role')
+  expect(explainAlternative(input, result, 'People', 'Jeffco')).toContain(
+    'None of Jeffco’s roles match'
+  )
 })
 
 it('rejects duplicate role ids', () => {
   const input = roleFixture()
   input.roles[1].id = 'eng'
   expect(() => matchInternships(input)).toThrow(/unique id/)
+})
+
+it('explains other roles at the same employer', () => {
+  const role = (title: string): JobRole => ({
+    id: title,
+    company: 'Aero',
+    title,
+    tags: [title],
+    capacity: 1
+  })
+  const input: MatchingInput = {
+    roles: [role('Engineering'), role('Design')],
+    companyLikes: new Map([['Aero', ['Alice', 'Bob']]]),
+    studentRatings: new Map([
+      ['Alice', new Map([['Aero', 5]])],
+      ['Bob', new Map([['Aero', 5]])]
+    ]),
+    studentInterests: new Map([
+      ['Alice', ['Engineering', 'Design']],
+      ['Bob', ['Engineering']]
+    ])
+  }
+  let result = matchInternships(input)
+  expect(explainAlternative(input, result, 'Alice', 'Aero', 'Engineering')).toBe(
+    'Placing Alice here would leave 1 other student without a placement.'
+  )
+  expect(explainAlternative(input, result, 'Bob', 'Aero', 'Design')).toBe(
+    'Bob’s interests don’t match Aero’s Design role.'
+  )
+  input.studentRatings.delete('Bob')
+  result = matchInternships(input)
+  expect(explainAlternative(input, result, 'Alice', 'Aero', 'Design')).toBe(
+    'Either role works for Alice, so the app picked one.'
+  )
 })

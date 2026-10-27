@@ -85,7 +85,8 @@ button.primary:hover:not(:disabled) {
   background: var(--accent-hover);
   box-shadow: 0 3px 10px rgb(74 107 87 / 15%);
 }
-button.editing {
+button.editing,
+.view-tabs [aria-selected='true'] {
   color: var(--accent-text);
   background: var(--accent-soft);
   border-color: var(--accent-border);
@@ -114,7 +115,8 @@ select {
   color: var(--text);
   min-width: 0;
 }
-input::placeholder {
+input::placeholder,
+input.inherited {
   color: var(--text-faint);
 }
 input[readonly] {
@@ -654,6 +656,21 @@ p {
   gap: 3px;
   font-weight: 600;
 }
+.manual-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid #e6c84f;
+  border-radius: 4px;
+  background: #fff6cc;
+  color: #6b5400;
+  font-size: 11px;
+  font-weight: 600;
+}
+.feedback-card .form-error {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  font-size: 11px;
+}
 .matched-label svg {
   width: 13px;
   height: 13px;
@@ -683,35 +700,96 @@ summary {
   margin-top: 4px;
   overflow-wrap: anywhere;
 }
-.assignment-panel {
+.view-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.history,
+.history-empty {
+  font-size: 12px;
+}
+.history-group + .history-group {
+  margin-top: 22px;
+}
+.history-group h3 {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+.history-group h3 span {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.history-entry {
+  display: flex;
+  gap: 14px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+.history-entry time {
+  min-width: 110px;
+  color: var(--text-muted);
+}
+.diff-removed,
+.diff-added {
+  margin: 4px 0 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.diff-removed {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+.diff-added {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+.assignment-panel,
+.history,
+.history-empty {
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 22px;
-  margin-top: 23px;
-}
-.assignment-panel h2 {
-  margin-bottom: 16px;
 }
 .assignment-row {
   border-top: 1px solid var(--border);
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   justify-content: space-between;
   gap: 20px;
   padding: 13px 0;
   font-size: 12px;
 }
+.assignment-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
 .assignment-row > span {
-  padding-top: 3px;
   min-width: 120px;
 }
+.assignment-row .form-error {
+  margin: 0;
+  padding: 8px 10px;
+}
+.assignment-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 70%;
+}
 .assignment-row select {
+  /* Size to the selected employer, not the longest option. */
+  field-sizing: content;
   font-size: 12px;
-  max-width: 55%;
+  max-width: 100%;
 }
 .assignment-row details {
-  max-width: 70%;
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -1114,7 +1192,8 @@ summary {
   line-height: 1.5;
   cursor: pointer;
 }
-.industry-options input {
+.industry-options input,
+.matched-label input {
   padding: 0;
   min-height: 0;
   width: 15px;
@@ -1365,4 +1444,41 @@ summary {
   .schedule-summary .stats {
     width: 100%;
   }
+}
+
+.find-bar {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+  font-size: 12px;
+}
+.find-bar input {
+  width: 200px;
+}
+/* Compact controls that sit inside text-sized rows. */
+.find-bar input,
+.find-bar button,
+.assignment-row select {
+  min-height: 32px;
+  padding: 5px 10px;
+}
+.find-count {
+  min-width: 64px;
+  color: var(--text-muted);
+  text-align: center;
+}
+::highlight(find) {
+  background-color: #fff2a8;
+}
+::highlight(find-current) {
+  background-color: #ffc46b;
 }
