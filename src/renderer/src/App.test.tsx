@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import App from './App'
-import { emptyWorkspace } from '../../shared/workspace'
+import { emptyWorkspace, type Workspace } from '../../shared/workspace'
 import { Student } from '../../shared/student'
 import { InterviewResult } from '../../shared/interviewResult'
 
@@ -46,6 +46,10 @@ function choosePlacement(student: string, label: string) {
 async function importData() {
   fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
   await screen.findByRole('heading', { name: 'Alice' })
+}
+
+function savedWorkspace(): Workspace {
+  return JSON.parse(localStorage.getItem('jcim-workspace-v1')!) as Workspace
 }
 
 it('shows the redesigned flow and explicit sheet actions', () => {
@@ -712,13 +716,14 @@ async function editEdgeCases() {
     data: edgeCases(),
     warnings: []
   })
-  render(<App />)
+  const app = render(<App />)
   fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
   await screen.findByRole('heading', { name: 'Alice' })
   fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Approve matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
+  return app
 }
 
 it('changes nothing when a student is chosen for the place they already have', async () => {
@@ -800,4 +805,107 @@ it('asks before re-running replaces manual changes, and keeps them on cancel', a
   fireEvent.click(screen.getByRole('button', { name: 'Replace manual changes' }))
   expect(screen.getByLabelText('Match Bob with Aero (Engineering)')).toBeChecked()
   expect(screen.queryByText(/^Manually/)).not.toBeInTheDocument()
+})
+
+it('persists manual moves and unmatches across reopening and exports their history', async () => {
+  const app = await editEdgeCases()
+  const generated = savedWorkspace().autoPlacements
+  fireEvent.click(screen.getByLabelText('Match Alice with Beta'))
+  fireEvent.click(screen.getByLabelText('Match Bob with Aero (Engineering)'))
+  const edited = savedWorkspace()
+  expect(edited.placements).toEqual([{ student: 'Alice', company: 'Beta', role: null, rating: 3 }])
+  expect(edited.autoPlacements).toEqual(generated)
+  expect(edited.matchingApproved).toBe(false)
+  expect(edited.history?.slice(-2)).toEqual([
+    expect.objectContaining({
+      kind: 'placement',
+      summary: 'Manual placement: Alice',
+      before: 'Aero · Design · 5/5',
+      after: 'Beta · 3/5'
+    }),
+    expect.objectContaining({
+      kind: 'placement',
+      summary: 'Manual placement: Bob',
+      before: 'Aero · Engineering · 4/5',
+      after: 'Unmatched'
+    })
+  ])
+
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
+  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
+  expect(vi.mocked(window.api.exportSheet).mock.calls[0][0]).toMatchObject({
+    placements: edited.placements,
+    autoPlacements: generated,
+    history: edited.history,
+    matchingApproved: false
+  })
+
+  // Reopening must retain both the edits and the generated baseline used for manual tags.
+  app.unmount()
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  const panel = screen
+    .getByText('Alice', { selector: '.assignment-row > span' })
+    .closest('section')!
+  expect(within(panel).getByText('Manually placed')).toBeInTheDocument()
+  expect(within(panel).getByText('Manually unmatched')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
+  expect(screen.getByLabelText('Placement for Alice')).toHaveDisplayValue('Beta (3/5)')
+  expect(screen.getByLabelText('Placement for Bob')).toHaveDisplayValue('Unmatched')
+  fireEvent.click(screen.getByRole('button', { name: 'Re-run matching' }))
+  expect(screen.getByRole('dialog')).toHaveTextContent('2 students changed by hand')
+})
+
+it('preserves placements, approval and history when an attempted manual move is rejected', async () => {
+  await editEdgeCases()
+  const approved = savedWorkspace()
+  fireEvent.click(screen.getByLabelText('Match Alice with Aero (Engineering)'))
+  expect(screen.getByRole('alert')).toHaveTextContent('full (Bob)')
+  expect(screen.getByLabelText('Match Alice with Aero (Design)')).toBeChecked()
+  expect(screen.getByLabelText('Match Bob with Aero (Engineering)')).toBeChecked()
+  expect(screen.getByRole('button', { name: 'Matching approved' })).toBeDisabled()
+  expect(savedWorkspace()).toEqual(approved)
+
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  choosePlacement('Alice', 'Aero · Engineering (5/5)')
+  expect(screen.getByRole('alert')).toHaveTextContent('full (Bob)')
+  expect(screen.getByLabelText('Placement for Alice')).toHaveDisplayValue('Aero · Design (5/5)')
+  expect(savedWorkspace()).toEqual(approved)
+})
+
+it('reuses a place freed by a manual move without displacing students in other roles', async () => {
+  await editEdgeCases()
+  fireEvent.click(screen.getByLabelText('Match Alice with Beta'))
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  choosePlacement('Bob', 'Unmatched')
+  choosePlacement('Alice', 'Aero · Engineering (5/5)')
+  choosePlacement('Bob', 'Aero · Engineering (4/5)')
+  expect(screen.getByRole('alert')).toHaveTextContent('full (Alice)')
+  expect(screen.getByLabelText('Placement for Bob')).toHaveDisplayValue('Unmatched')
+  expect(savedWorkspace().placements).toEqual([
+    { student: 'Alice', company: 'Aero', role: 'Engineering', rating: 5 }
+  ])
+  choosePlacement('Alice', 'Aero · Design (5/5)')
+  choosePlacement('Bob', 'Aero · Engineering (4/5)')
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(savedWorkspace().placements).toEqual([
+    { student: 'Alice', company: 'Aero', role: 'Design', rating: 5 },
+    { student: 'Bob', company: 'Aero', role: 'Engineering', rating: 4 }
+  ])
+})
+
+it('reruns without confirmation after all manual overrides are restored to generated assignments', async () => {
+  await editEdgeCases()
+  fireEvent.click(screen.getByLabelText('Match Alice with Beta'))
+  fireEvent.click(screen.getByLabelText('Match Bob with Aero (Engineering)'))
+  fireEvent.click(screen.getByLabelText('Match Alice with Aero (Design)'))
+  fireEvent.click(screen.getByLabelText('Match Bob with Aero (Engineering)'))
+  expect(screen.queryByText(/^Manually/)).not.toBeInTheDocument()
+  // Restoring the assignments does not restore the coordinator's prior approval.
+  expect(screen.getByRole('button', { name: 'Approve matching' })).toBeEnabled()
+  expect(savedWorkspace().history?.filter((entry) => entry.kind === 'placement')).toHaveLength(4)
+  fireEvent.click(screen.getByRole('button', { name: 'Re-run matching' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(savedWorkspace().placements).toEqual(savedWorkspace().autoPlacements)
 })
