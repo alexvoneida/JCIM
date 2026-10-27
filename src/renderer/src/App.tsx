@@ -3,11 +3,15 @@ import {
   emptyWorkspace,
   type Workspace,
   type Employer,
+  type Placement,
   type SheetError
 } from '../../shared/workspace'
 import { industryBank, industryName, rememberIndustries } from '../../shared/industries'
 import SchedulePage from './SchedulePage'
 import Modal from './Modal'
+import FindBar from './FindBar'
+import HistoryView from './HistoryView'
+import { placementLabel, recordHistory } from './history'
 import { scheduleSettings, scheduleIssues, settingsError } from '../../shared/scheduling'
 import IndustryPicker, { OTHER_INDUSTRY } from './IndustryPicker'
 import type { Student } from '../../shared/student'
@@ -20,9 +24,11 @@ import {
   employerRoles,
   formatRoles,
   parseRoles,
+  samePlacement,
   sameRole,
   sharedTags
 } from '../../shared/roles'
+import type { JobRole } from './matching-types'
 import { explainAlternative } from './placement-explanation'
 
 type Page = 'overview' | 'schedule' | 'matching' | 'employers'
@@ -160,6 +166,24 @@ function industrySelection(
   }
 }
 
+// Explanations re-run the matching, so they are only worked out once opened.
+function Why({
+  summary,
+  className,
+  children
+}: {
+  summary: string
+  className?: string
+  children: () => ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className={className} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>{summary}</summary>
+      {open && children()}
+    </details>
+  )
+}
 function countLabel(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
@@ -168,18 +192,6 @@ function Empty({ title, children }: { title: string; children: ReactNode }) {
     <div className="empty">
       <h2>{title}</h2>
       {children}
-    </div>
-  )
-}
-function Stats({ values }: { values: [string, ReactNode][] }) {
-  return (
-    <div className="stats">
-      {values.map(([label, value]) => (
-        <div className="stat" key={label}>
-          <span>{label}</span>
-          <strong>{value}</strong>
-        </div>
-      ))}
     </div>
   )
 }
@@ -306,7 +318,17 @@ export default function App() {
   const [confirmImport, setConfirmImport] = useState(false)
   const [editSchedule, setEditSchedule] = useState(false)
   const [editMatching, setEditMatching] = useState(false)
+  const [matchingView, setMatchingView] = useState<'approvals' | 'students' | 'history'>(
+    'approvals'
+  )
+  const [placementError, setPlacementError] = useState<{
+    student: string
+    at: string
+    message: string
+  }>()
   const [confirmRegenerate, setConfirmRegenerate] = useState(false)
+  // How many manual changes a re-run would replace, while asking to confirm it.
+  const [confirmRematch, setConfirmRematch] = useState(0)
   const [formError, setFormError] = useState('')
   const [industryToRemove, setIndustryToRemove] = useState<string | null>(null)
   const students = Object.values(data.students)
@@ -314,13 +336,12 @@ export default function App() {
   const active = data.employers.filter((e) => e.active)
   const input = matchingInput(data)
   const matchingFeedback = latestFeedback(data)
-  const result = {
-    assignments: data.placements,
-    unmatchedStudents: students
-      .map((s) => s.name)
-      .filter((name) => !data.placements.some((p) => p.student === name)),
-    totalRating: data.placements.reduce((sum, p) => sum + p.rating, 0)
-  }
+  const approvals = matchingFeedback.filter(
+    (i) => i.employerAccept === true && active.some((e) => e.name === i.business)
+  ).length
+  // Explanations describe what Generate decided, so manual edits elsewhere don't change them.
+  // Imported workspaces have no generated matching, so their current placements are used.
+  const generated = { assignments: data.autoPlacements ?? data.placements }
   // One column per role. Employers without roles keep a single column. Students
   // whose interests fit none of an employer's roles get their own column.
   const matchingColumns = active.flatMap((e) => {
@@ -363,6 +384,7 @@ export default function App() {
   )
 
   function commit(next: Workspace) {
+    next = recordHistory(data, next)
     next = rememberIndustries({
       ...next,
       scheduleSettings: next.scheduleSettings ?? scheduleSettings(next)
@@ -448,6 +470,7 @@ export default function App() {
         ? data.schedule.filter((i) => i.employer !== employer.name)
         : data.schedule,
       placements: [],
+      autoPlacements: [],
       scheduleApproved: false,
       matchingApproved: false
     })
@@ -503,6 +526,7 @@ export default function App() {
           ? [...data.employers, employer]
           : data.employers.map((e) => (e.name === name ? employer : e)),
       placements: [],
+      autoPlacements: [],
       matchingApproved: false
     })
     setEmployerForm(null)
@@ -514,7 +538,7 @@ export default function App() {
         JSON.stringify(s.interests ?? []) !== JSON.stringify(data.students[name]?.interests ?? [])
     )
     return changed
-      ? { placements: [], matchingApproved: false }
+      ? { placements: [], autoPlacements: [], matchingApproved: false }
       : { placements: data.placements, matchingApproved: data.matchingApproved }
   }
   function saveStudentIndustries(event: FormEvent<HTMLFormElement>) {
@@ -580,7 +604,13 @@ export default function App() {
       })
     }
   }
-  function generateMatches() {
+  function generateMatches(replaceManual = false) {
+    const manual = students.filter((s) => manuallyPlaced(s.name)).length
+    if (manual && !replaceManual) {
+      setConfirmRematch(manual)
+      return
+    }
+    setConfirmRematch(0)
     if (!active.some((e) => employerCapacity(e) > 0)) {
       showError({
         title: 'No capacity available',
@@ -590,7 +620,12 @@ export default function App() {
       return
     }
     const matched = matchInternships(input)
-    const saved = commit({ ...data, placements: matched.assignments, matchingApproved: false })
+    const saved = commit({
+      ...data,
+      placements: matched.assignments,
+      autoPlacements: matched.assignments,
+      matchingApproved: false
+    })
     if (saved && !matched.assignments.length)
       setNotice({
         kind: 'warning',
@@ -613,38 +648,48 @@ export default function App() {
         } as Student
       },
       placements: [],
+      autoPlacements: [],
       matchingApproved: false
     })
   }
-  function choosePlacement(student: string, employer: string) {
+  // `roleTitle` limits the placement to one role (a board column); otherwise the first fitting role is used.
+  function choosePlacement(
+    student: string,
+    employer: string,
+    roleTitle?: string | null,
+    at = 'students'
+  ) {
+    setPlacementError(undefined)
+    // Choosing the place the student already has changes nothing, so the approval is kept.
+    const current = data.placements.find((p) => p.student === student)
+    if (employer ? samePlacement(current, { company: employer, role: roleTitle }) : !current) return
     const remaining = data.placements.filter((p) => p.student !== student)
     if (!employer) {
       commit({ ...data, placements: remaining, matchingApproved: false })
       return
     }
-    const rating = input.studentRatings.get(student)?.get(employer)
-    if (!rating || !input.companyLikes.get(employer)?.includes(student)) {
-      showError({
-        title: 'Placement not eligible',
-        detail: `${student} needs employer approval and a rating for ${employer}.`
-      })
+    const ineligible = ineligibleReason(student, employer, true)
+    if (ineligible) {
+      setPlacementError({ student, at, message: ineligible })
       return
     }
-    // Use the first role this student fits that still has a free place.
-    const fitting = input.roles.filter((r) => r.company === employer && canFill(input, student, r))
+    const rating = input.studentRatings.get(student)!.get(employer)!
+    const fitting = input.roles.filter(
+      (r) =>
+        r.company === employer &&
+        (roleTitle === undefined || sameRole(r.title, roleTitle)) &&
+        canFill(input, student, r)
+    )
     const role = fitting.find(
       (r) =>
         remaining.filter((p) => p.company === employer && sameRole(p.role, r.title)).length <
         r.capacity
     )
     if (!role) {
-      showError({
-        title: 'Employer is full',
-        detail: !fitting.length
-          ? `${employer} has no role that matches ${student}’s interests.`
-          : fitting.every((r) => r.title === null)
-            ? `${employer} has reached its capacity.`
-            : `${employer} has no free place in a role that fits ${student}.`
+      setPlacementError({
+        student,
+        at,
+        message: fullMessage(student, employer, fitting, remaining)
       })
       return
     }
@@ -653,6 +698,117 @@ export default function App() {
       placements: [...remaining, { student, company: employer, role: role.title, rating }],
       matchingApproved: false
     })
+  }
+  function fullMessage(
+    student: string,
+    employer: string,
+    fitting: JobRole[],
+    remaining: Placement[]
+  ) {
+    if (!fitting.length) return `${employer} has no role that matches ${student}’s interests.`
+    const where = fitting.every((r) => r.title === null)
+      ? employer
+      : `${employer}’s ${fitting.map((r) => r.title).join(' and ')} role${fitting.length === 1 ? '' : 's'}`
+    const taken = remaining
+      .filter((p) => p.company === employer && fitting.some((r) => sameRole(p.role, r.title)))
+      .map((p) => p.student)
+    if (!taken.length) return `${where} has no places. Add places on the Employers page.`
+    const verb = fitting.length === 1 ? 'is' : 'are'
+    return `${where} ${verb} full (${taken.join(', ')}). Unassign one of them first, or add places on the Employers page.`
+  }
+  // Shown next to the control that was changed, where the coordinator is looking.
+  function placementAlert(student: string, at: string) {
+    return (
+      editMatching &&
+      placementError?.student === student &&
+      placementError.at === at && (
+        <p className="form-error" role="alert">
+          {placementError.message}
+        </p>
+      )
+    )
+  }
+  // A placement is manual when it differs from what the last generated matching chose.
+  function manuallyPlaced(student: string) {
+    if (!data.autoPlacements) return false
+    return !samePlacement(
+      data.autoPlacements.find((p) => p.student === student),
+      data.placements.find((p) => p.student === student)
+    )
+  }
+  // Why a student cannot be placed with an employer, matching the rules in matchingInput.
+  function ineligibleReason(student: string, employer: string, withFix = false) {
+    const i = matchingFeedback.find((i) => i.student === student && i.business === employer)
+    if (!i) return `${student} has no interview with ${employer}.`
+    if (i.acceptance === false) return `${student} declined ${employer}.`
+    if (i.employerAccept === false) return `${employer} declined ${student}.`
+    if (i.employerAccept !== true)
+      return `${employer} has not approved ${student} yet.${withFix ? ' Set the employer response to Approved first.' : ''}`
+    if (preference(i) === undefined)
+      return `${student} has not rated ${employer}.${withFix ? ' Set a student rating first.' : ''}`
+  }
+  // One line for every other active employer the student interviewed with.
+  function otherOptions(student: string, except?: string) {
+    return matchingFeedback
+      .filter(
+        (i) =>
+          i.student === student &&
+          i.business !== except &&
+          active.some((e) => e.name === i.business)
+      )
+      .map(({ business }) => (
+        <p key={business}>
+          <strong>{business}:</strong>{' '}
+          {ineligibleReason(student, business) ??
+            explainAlternative(input, generated, student, business)}
+        </p>
+      ))
+  }
+  function whyPlaced(
+    student: string,
+    company: string,
+    rating: number,
+    role: { title: string | null; tags: string[] } | undefined
+  ) {
+    const shared = sharedTags(data.students[student]?.interests, { tags: role?.tags ?? [] })
+    const otherRoles = input.roles.filter(
+      (r) => r.company === company && !sameRole(r.title, role?.title) && canFill(input, student, r)
+    )
+    const onlyOption = !input.roles.some(
+      (r) =>
+        !(r.company === company && sameRole(r.title, role?.title)) &&
+        r.capacity >= 1 &&
+        canFill(input, student, r)
+    )
+    return (
+      <>
+        <p>
+          {student} rated {company} {rating}/5, and {company} approved {student}.
+        </p>
+        {role?.title && (
+          <p>
+            {student}’s interest{shared.length === 1 ? '' : 's'} in{' '}
+            {shared.map((t, n) => (
+              <span key={t}>
+                {n > 0 && (n === shared.length - 1 ? ' and ' : ', ')}
+                <strong>{t}</strong>
+              </span>
+            ))}{' '}
+            match{shared.length === 1 ? 'es' : ''} the {role.title} role.
+          </p>
+        )}
+        {onlyOption && <p>This was {student}’s only possible placement.</p>}
+        {otherRoles.map((r) => (
+          <p key={r.id}>
+            <strong>
+              {company} ({r.title}):
+            </strong>{' '}
+            {explainAlternative(input, generated, student, company, r.title)}
+          </p>
+        ))}
+        {otherOptions(student, company)}
+      </>
+    )
   }
   const nav: [Page, IconName, string][] = [
     ['overview', 'grid', 'Students'],
@@ -798,7 +954,7 @@ export default function App() {
             )}
             {page === 'matching' && (
               <>
-                <button onClick={generateMatches}>
+                <button onClick={() => generateMatches()}>
                   {data.placements.length ? 'Re-run matching' : 'Generate matching'}
                 </button>
                 <button
@@ -1006,27 +1162,37 @@ export default function App() {
         )}
         {page === 'matching' && (
           <>
-            <Stats
-              values={[
+            <div className="view-tabs" role="tablist">
+              {(
                 [
-                  'Employer approvals',
-                  matchingFeedback.filter(
-                    (i) => i.employerAccept === true && active.some((e) => e.name === i.business)
-                  ).length
-                ],
-                ['Matched students', `${data.placements.length} of ${students.length}`]
-              ]}
-            />
+                  ['approvals', `View employer approvals (${approvals})`],
+                  [
+                    'students',
+                    `View matched students (${data.placements.length} of ${students.length})`
+                  ],
+                  ['history', 'Edit history']
+                ] as const
+              ).map(([view, label]) => (
+                <button
+                  key={view}
+                  role="tab"
+                  aria-selected={matchingView === view}
+                  onClick={() => setMatchingView(view)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <details className="matching-rules">
               <summary>How matching works</summary>
               <p>
                 Each student is placed with at most one active employer, within that employer’s
-                capacity. A placement requires employer approval and a student rating. Students do
-                not decline; a low rating (1/5) means less interest. Matching places as many
-                students as possible, then maximizes the total of student ratings (1–5).
+                capacity. A placement requires employer approval and a student rating, and is never
+                made with an employer the student declined. Matching places as many students as
+                possible, then maximizes the total of student ratings (1–5).
               </p>
             </details>
-            <section className="board">
+            <section className="board" hidden={matchingView !== 'approvals'}>
               <div className="board-heading">
                 <strong>Employer feedback</strong>
                 <span className={`status-dot ${data.matchingApproved ? 'approved' : ''}`}>
@@ -1076,9 +1242,10 @@ export default function App() {
                                     p.company === e.name &&
                                     sameRole(p.role, title)
                                 )
+                              const declined = i.acceptance === false || i.employerAccept === false
                               return (
                                 <article
-                                  className={`feedback-card ${selected ? 'selected' : ''} ${i.employerAccept ? '' : i.employerAccept === false ? 'declined' : 'pending'}`}
+                                  className={`feedback-card ${selected ? 'selected' : ''} ${declined ? 'declined' : i.employerAccept ? '' : 'pending'}`}
                                   key={`${i.student}-${i.index}`}
                                 >
                                   <div className="feedback-heading">
@@ -1092,21 +1259,43 @@ export default function App() {
                                   </div>
                                   <div className="feedback-status">
                                     <span
-                                      className={`feedback-state ${i.employerAccept ? 'approved' : i.employerAccept === false ? 'declined' : ''}`}
+                                      className={`feedback-state ${declined ? 'declined' : i.employerAccept ? 'approved' : ''}`}
                                     >
-                                      {i.employerAccept
-                                        ? 'Employer approved'
-                                        : i.employerAccept === false
-                                          ? 'Employer declined'
-                                          : 'Feedback pending'}
+                                      {i.acceptance === false
+                                        ? 'Student declined'
+                                        : i.employerAccept
+                                          ? 'Employer approved'
+                                          : i.employerAccept === false
+                                            ? 'Employer declined'
+                                            : 'Feedback pending'}
                                     </span>
-                                    {selected && (
-                                      <span className="matched-label">
-                                        <Icon name="check" />
+                                    {editMatching ? (
+                                      <label className="matched-label">
+                                        <input
+                                          type="checkbox"
+                                          aria-label={`Match ${i.student} with ${where}`}
+                                          checked={selected}
+                                          onChange={(event) =>
+                                            choosePlacement(
+                                              i.student,
+                                              event.target.checked ? e.name : '',
+                                              unfit ? undefined : title,
+                                              key
+                                            )
+                                          }
+                                        />
                                         Matched
-                                      </span>
+                                      </label>
+                                    ) : (
+                                      selected && (
+                                        <span className="matched-label">
+                                          <Icon name="check" />
+                                          Matched
+                                        </span>
+                                      )
                                     )}
                                   </div>
+                                  {placementAlert(i.student, key)}
                                   {editMatching && (
                                     <div className="feedback-edit">
                                       <label>
@@ -1155,44 +1344,47 @@ export default function App() {
                                       </label>
                                     </div>
                                   )}
-                                  {selected && (
-                                    <details className="placement-explanation">
-                                      <summary>Why this placement?</summary>
-                                      <p>
-                                        {i.student} rated {e.name} {i.rank}/5 and was approved by
-                                        the employer.
-                                      </p>
-                                      {title &&
-                                        (() => {
-                                          const shared = sharedTags(
-                                            data.students[i.student]?.interests,
-                                            { tags }
-                                          )
-                                          return (
-                                            <p>
-                                              {i.student} and the {title} role both share the tag
-                                              {shared.length === 1 ? '' : 's'}{' '}
-                                              {shared.map((t, n) => (
-                                                <span key={t}>
-                                                  {n > 0 &&
-                                                    (n === shared.length - 1 ? ' and ' : ', ')}
-                                                  <strong>{t}</strong>
-                                                </span>
-                                              ))}
-                                              .
-                                            </p>
-                                          )
-                                        })()}
-                                      {[...(input.studentRatings.get(i.student) ?? [])]
-                                        .filter(([name]) => name !== e.name)
-                                        .map(([name]) => (
-                                          <p key={name}>
-                                            <strong>{name}:</strong>{' '}
-                                            {explainAlternative(input, result, i.student, name)}
-                                          </p>
-                                        ))}
-                                    </details>
+                                  {selected && manuallyPlaced(i.student) && (
+                                    <span className="manual-tag">Manually placed</span>
                                   )}
+                                  {/* Where Generate placed this student before a manual change. */}
+                                  {!selected &&
+                                    !unfit &&
+                                    data.autoPlacements?.some(
+                                      (p) =>
+                                        p.student === i.student &&
+                                        p.company === e.name &&
+                                        sameRole(p.role, title)
+                                    ) && <span className="manual-tag">Manually unmatched</span>}
+                                  {selected && !manuallyPlaced(i.student) && (
+                                    <Why
+                                      className="placement-explanation"
+                                      summary="Why this placement?"
+                                    >
+                                      {() => whyPlaced(i.student, e.name, i.rank, { title, tags })}
+                                    </Why>
+                                  )}
+                                  {!selected &&
+                                    !unfit &&
+                                    !manuallyPlaced(i.student) &&
+                                    !ineligibleReason(i.student, e.name) && (
+                                      <Why
+                                        className="placement-explanation"
+                                        summary="Why not here?"
+                                      >
+                                        {() => (
+                                          <p>
+                                            {explainAlternative(
+                                              input,
+                                              generated,
+                                              i.student,
+                                              e.name,
+                                              title
+                                            )}
+                                          </p>
+                                        )}
+                                      </Why>
+                                    )}
                                   {i.employerNotes && (
                                     <details className="placement-explanation">
                                       <summary>Employer notes</summary>
@@ -1214,50 +1406,87 @@ export default function App() {
                 </div>
               )}
             </section>
-            {!!students.length && (editMatching || result.unmatchedStudents.length > 0) && (
-              <section className="assignment-panel">
-                <h2>{editMatching ? 'Student assignments' : 'Unmatched students'}</h2>
-                {(editMatching ? students.map((s) => s.name) : result.unmatchedStudents).map(
-                  (name) => (
+            {!!students.length && (
+              <section className="assignment-panel" hidden={matchingView !== 'students'}>
+                {students.map(({ name }) => {
+                  const placement = data.placements.find((p) => p.student === name)
+                  const placementText = placement && placementLabel(placement)
+                  return (
                     <div className="assignment-row" key={name}>
                       <span>{name}</span>
-                      {editMatching ? (
-                        <select
-                          aria-label={`Placement for ${name}`}
-                          value={data.placements.find((p) => p.student === name)?.company ?? ''}
-                          onChange={(e) => choosePlacement(name, e.target.value)}
-                        >
-                          <option value="">Unmatched</option>
-                          {[...(input.studentRatings.get(name) ?? [])].map(([company]) => (
-                            <option key={company} value={company}>
-                              {company}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <details>
-                          <summary>Why unmatched?</summary>
-                          <p>
-                            {!input.studentRatings.get(name)?.size
-                              ? 'No active employer has both approved this student and been rated by them.'
-                              : 'Not placed in the current matching.'}
-                          </p>
-                          {[...(input.studentRatings.get(name) ?? [])].map(([company]) => (
-                            <p key={company}>
-                              <strong>{company}:</strong>{' '}
-                              {explainAlternative(input, result, name, company)}
-                            </p>
-                          ))}
-                        </details>
-                      )}
+                      <div className="assignment-info">
+                        {editMatching && (
+                          <select
+                            aria-label={`Placement for ${name}`}
+                            value={
+                              input.roles.find(
+                                (r) =>
+                                  r.company === placement?.company &&
+                                  sameRole(r.title, placement.role)
+                              )?.id ?? ''
+                            }
+                            onChange={(e) => {
+                              const role = input.roles.find((r) => r.id === e.target.value)
+                              choosePlacement(name, role?.company ?? '', role?.title)
+                            }}
+                          >
+                            <option value="">Unmatched</option>
+                            {input.roles
+                              .filter((r) => canFill(input, name, r))
+                              .map((r) => (
+                                <option key={r.id} value={r.id}>
+                                  {[r.company, r.title].filter(Boolean).join(' · ')} (
+                                  {input.studentRatings.get(name)!.get(r.company)}/5)
+                                </option>
+                              ))}
+                          </select>
+                        )}
+                        {placementAlert(name, 'students')}
+                        {manuallyPlaced(name) ? (
+                          <span>
+                            {placementText ?? 'Unmatched'}{' '}
+                            <span className="manual-tag">
+                              {placement ? 'Manually placed' : 'Manually unmatched'}
+                            </span>
+                          </span>
+                        ) : placement ? (
+                          <Why summary={`${placementText} — Why matched?`}>
+                            {() =>
+                              whyPlaced(
+                                name,
+                                placement.company,
+                                placement.rating,
+                                input.roles.find(
+                                  (r) =>
+                                    r.company === placement.company &&
+                                    sameRole(r.title, placement.role)
+                                )
+                              )
+                            }
+                          </Why>
+                        ) : (
+                          <Why summary="Why unmatched?">
+                            {() => {
+                              const lines = otherOptions(name)
+                              return lines.length ? (
+                                lines
+                              ) : (
+                                <p>{name} has no interviews with active employers.</p>
+                              )
+                            }}
+                          </Why>
+                        )}
+                      </div>
                     </div>
                   )
-                )}
+                })}
               </section>
             )}
+            {matchingView === 'history' && <HistoryView history={data.history ?? []} />}
           </>
         )}
       </main>
+      <FindBar />
       {confirmImport && (
         <Modal title="Replace current data?" onClose={() => setConfirmImport(false)}>
           <p>
@@ -1356,6 +1585,20 @@ export default function App() {
             <button onClick={() => setConfirmRegenerate(false)}>Cancel</button>
             <button className="primary" onClick={generateInterviews}>
               Replace schedule
+            </button>
+          </div>
+        </Modal>
+      )}
+      {!!confirmRematch && (
+        <Modal title="Replace manual changes?" onClose={() => setConfirmRematch(0)}>
+          <p>
+            {countLabel(confirmRematch, 'student')} changed by hand will be replaced by the app’s
+            matching. The changes stay in Edit history.
+          </p>
+          <div className="modal-actions">
+            <button onClick={() => setConfirmRematch(0)}>Cancel</button>
+            <button className="primary" onClick={() => generateMatches(true)}>
+              Replace manual changes
             </button>
           </div>
         </Modal>

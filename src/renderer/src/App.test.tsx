@@ -36,6 +36,13 @@ beforeEach(() => {
     })
   }
 })
+// Picks a placement option by its visible label, like a coordinator would.
+function choosePlacement(student: string, label: string) {
+  const select = screen.getByLabelText(`Placement for ${student}`)
+  const option = within(select).getByRole<HTMLOptionElement>('option', { name: label })
+  fireEvent.change(select, { target: { value: option.value } })
+}
+
 async function importData() {
   fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
   await screen.findByRole('heading', { name: 'Alice' })
@@ -383,10 +390,19 @@ it('invalidates matches when feedback changes and enforces internship capacity f
   fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
   fireEvent.click(screen.getByRole('button', { name: 'Approve matching' }))
   expect(screen.getByRole('button', { name: 'Matching approved' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('tab', { name: 'View matched students (1 of 2)' }))
+  expect(screen.getByText('Aero · 5/5 — Why matched?')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
-  fireEvent.change(screen.getByLabelText('Placement for Bob'), { target: { value: 'Aero' } })
-  expect(screen.getByRole('alert')).toHaveTextContent('Aero has reached its capacity')
+  choosePlacement('Bob', 'Aero (4/5)')
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Aero is full (Alice). Unassign one of them first'
+  )
   expect(screen.getByLabelText('Placement for Bob')).toHaveValue('')
+  fireEvent.click(screen.getByRole('tab', { name: /View employer approvals/ }))
+  expect(screen.getByLabelText('Match Alice with Aero')).toBeChecked()
+  fireEvent.click(screen.getByLabelText('Match Bob with Aero'))
+  expect(screen.getByLabelText('Match Bob with Aero')).not.toBeChecked()
+  expect(screen.getByRole('alert')).toHaveTextContent('Aero is full (Alice).')
   fireEvent.change(screen.getByLabelText('Employer response for Alice at Aero'), {
     target: { value: 'no' }
   })
@@ -395,8 +411,12 @@ it('invalidates matches when feedback changes and enforces internship capacity f
   expect(screen.getByLabelText('Employer response for Alice at Aero')).toHaveValue('no')
   expect(screen.getByText('Employer declined').closest('article')).toHaveClass('declined')
   expect(screen.getByRole('button', { name: 'Approve matching' })).toBeDisabled()
-  fireEvent.change(screen.getByLabelText('Placement for Bob'), { target: { value: 'Aero' } })
-  expect(screen.getByLabelText('Placement for Bob')).toHaveValue('Aero')
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  choosePlacement('Bob', 'Aero (4/5)')
+  expect(screen.getByLabelText('Placement for Bob')).toHaveDisplayValue('Aero (4/5)')
+  expect(
+    screen.getByText('Manually placed', { selector: '.assignment-info .manual-tag' })
+  ).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Approve matching' })).toBeEnabled()
 })
 
@@ -538,4 +558,246 @@ it('clears placements when a placed student’s interests change', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
   await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
   expect(vi.mocked(window.api.exportSheet).mock.calls[0][0].placements).toEqual([])
+})
+
+it('finds text on the page with Ctrl+F', async () => {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: fixture(),
+    warnings: []
+  })
+  render(<App />)
+  await importData()
+  fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
+  fireEvent.change(screen.getByLabelText('Find in page'), { target: { value: 'alice' } })
+  expect(screen.getByText(/^1 of \d+$/)).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Find in page'), { target: { value: 'zzz' } })
+  expect(screen.getByText('No matches')).toBeInTheDocument()
+  fireEvent.keyDown(screen.getByLabelText('Find in page'), { key: 'Escape' })
+  expect(screen.queryByLabelText('Find in page')).not.toBeInTheDocument()
+})
+
+it('tags manual placements and drops the tag when the generated placement is restored', async () => {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: fixture(),
+    warnings: []
+  })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
+  expect(screen.queryByText(/^Manually/)).not.toBeInTheDocument()
+  choosePlacement('Alice', 'Unmatched')
+  expect(screen.queryByText('Why unmatched?')).not.toBeInTheDocument()
+  // One tag in the students view and one on the employer card where Generate placed Alice.
+  expect(screen.getAllByText('Manually unmatched')).toHaveLength(2)
+  choosePlacement('Alice', 'Aero (5/5)')
+  expect(screen.queryByText(/^Manually/)).not.toBeInTheDocument()
+  expect(screen.getByText(/Why matched\?/)).toBeInTheDocument()
+})
+
+it('explains why a low-rated student took the place a higher-rated student wanted', async () => {
+  const data = fixture()
+  data.employers.push({ name: 'Beta', industry: '', capacity: 1, active: true })
+  const beta = new InterviewResult('Alice', '1', 'Beta', '', '', '', 'Yes', '4')
+  beta.employerAccept = true
+  data.students.Alice.interviewResults.push(beta)
+  data.students.Dan = Object.assign(new Student(), { name: 'Dan' })
+  const dan = new InterviewResult('Dan', '1', 'Aero', '', '', '', 'Yes', '1')
+  dan.employerAccept = true
+  data.students.Dan.interviewResults.push(dan)
+  vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  // Explanations are only worked out once opened.
+  const open = (summary: HTMLElement) => {
+    const details = summary.closest('details')!
+    details.open = true
+    fireEvent(details, new Event('toggle'))
+  }
+  open(screen.getByText('Why not here?'))
+  expect(
+    screen.getByText('Placing Alice here would leave 1 other student without a placement.')
+  ).toBeInTheDocument()
+  const danCard = screen.getByRole('heading', { name: 'Dan' }).closest('article')!
+  open(within(danCard).getByText('Why this placement?'))
+  expect(within(danCard).getByText('This was Dan’s only possible placement.')).toBeInTheDocument()
+})
+
+it('shows generated, manual and approved changes in the edit history', async () => {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: fixture(),
+    warnings: []
+  })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve matching' }))
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
+  choosePlacement('Alice', 'Unmatched')
+  fireEvent.click(screen.getByRole('tab', { name: 'Edit history' }))
+  const groups = screen.getAllByRole('heading', { level: 3 })
+  expect(groups[0]).toHaveTextContent('Not approved yet1 change')
+  expect(groups[1]).toHaveTextContent(/^Approved .*1 change$/)
+  expect(screen.getByText('Manual placement: Alice')).toBeInTheDocument()
+  expect(screen.getByText('− Aero · 5/5')).toBeInTheDocument()
+  expect(screen.getByText('+ Unmatched')).toBeInTheDocument()
+  expect(screen.getByText('Generated matching: 1 placed')).toBeInTheDocument()
+})
+
+// Aero has two one-place roles, Beta one general place and Zero none. Generate puts Alice in
+// Design and Bob in Engineering. Cara, Dee and Eve each have a different reason they cannot go.
+function edgeCases() {
+  const data = emptyWorkspace()
+  data.employers = [
+    {
+      name: 'Aero',
+      industry: '',
+      capacity: 0,
+      active: true,
+      roles: [
+        { title: 'Engineering', capacity: 1 },
+        { title: 'Design', capacity: 1 }
+      ]
+    },
+    { name: 'Beta', industry: '', capacity: 1, active: true },
+    { name: 'Zero', industry: '', capacity: 0, active: true }
+  ]
+  const interviews: [string, string[], [string, string, boolean | undefined, boolean?][]][] = [
+    [
+      'Alice',
+      ['Engineering', 'Design'],
+      [
+        ['Aero', '5', true],
+        ['Beta', '3', true]
+      ]
+    ],
+    ['Bob', ['Engineering'], [['Aero', '4', true]]],
+    [
+      'Cara',
+      [],
+      [
+        ['Aero', '2', true],
+        ['Beta', '5', undefined],
+        ['Zero', '4', true]
+      ]
+    ],
+    ['Dee', [], [['Beta', '5', true, false]]],
+    ['Eve', [], [['Beta', '', true]]]
+  ]
+  for (const [name, interests, results] of interviews) {
+    const student = Object.assign(new Student(), { name, interests })
+    for (const [business, rank, employerAccept, acceptance] of results) {
+      const i = new InterviewResult(name, '1', business, '', '', '', '', rank)
+      i.employerAccept = employerAccept
+      i.acceptance = acceptance
+      student.interviewResults.push(i)
+    }
+    data.students[name] = student
+  }
+  return data
+}
+
+async function editEdgeCases() {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: edgeCases(),
+    warnings: []
+  })
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
+  await screen.findByRole('heading', { name: 'Alice' })
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Edit matching' }))
+}
+
+it('changes nothing when a student is chosen for the place they already have', async () => {
+  await editEdgeCases()
+  expect(screen.getByLabelText('Match Alice with Aero (Design)')).toBeChecked()
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  const select = screen.getByLabelText('Placement for Alice')
+  expect(select).toHaveDisplayValue('Aero · Design (5/5)')
+  choosePlacement('Alice', 'Aero · Design (5/5)')
+  expect(select).toHaveDisplayValue('Aero · Design (5/5)')
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.queryByText(/^Manually/)).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Matching approved' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('tab', { name: 'Edit history' }))
+  expect(screen.queryByText(/^Manual placement/)).not.toBeInTheDocument()
+})
+
+it('moves a student in one action, freeing their old place and recording the move', async () => {
+  await editEdgeCases()
+  fireEvent.click(screen.getByLabelText('Match Alice with Beta'))
+  expect(screen.getByLabelText('Match Alice with Beta')).toBeChecked()
+  expect(screen.getByLabelText('Match Alice with Aero (Design)')).not.toBeChecked()
+  expect(screen.getAllByText('0 of 1 filled')).toHaveLength(1)
+  expect(screen.getByRole('button', { name: 'Approve matching' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  expect(screen.getByLabelText('Placement for Alice')).toHaveDisplayValue('Beta (3/5)')
+  fireEvent.click(screen.getByRole('tab', { name: 'Edit history' }))
+  expect(screen.getByText('− Aero · Design · 5/5')).toBeInTheDocument()
+  expect(screen.getByText('+ Beta · 3/5')).toBeInTheDocument()
+})
+
+it('moves a student between roles at the same employer only when the role has room', async () => {
+  await editEdgeCases()
+  fireEvent.click(screen.getByLabelText('Match Alice with Aero (Engineering)'))
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Aero’s Engineering role is full (Bob). Unassign one of them first'
+  )
+  fireEvent.click(screen.getByLabelText('Match Bob with Aero (Engineering)'))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByLabelText('Match Alice with Aero (Engineering)'))
+  expect(screen.getByLabelText('Match Alice with Aero (Engineering)')).toBeChecked()
+  expect(screen.getByLabelText('Match Alice with Aero (Design)')).not.toBeChecked()
+  // The student-view dropdown lists each role, so it never picks one for the coordinator.
+  fireEvent.click(screen.getByRole('tab', { name: /View matched students/ }))
+  choosePlacement('Alice', 'Aero · Design (5/5)')
+  expect(screen.getByLabelText('Placement for Alice')).toHaveDisplayValue('Aero · Design (5/5)')
+})
+
+it('explains every reason a placement cannot be made, next to the box that was ticked', async () => {
+  await editEdgeCases()
+  const reasons: [string, string][] = [
+    [
+      'Match Cara with Beta',
+      'Beta has not approved Cara yet. Set the employer response to Approved first.'
+    ],
+    ['Match Dee with Beta', 'Dee declined Beta.'],
+    ['Match Eve with Beta', 'Eve has not rated Beta. Set a student rating first.'],
+    ['Match Cara with Aero (no matching role)', 'Aero has no role that matches Cara’s interests.'],
+    ['Match Cara with Zero', 'Zero has no places. Add places on the Employers page.']
+  ]
+  for (const [box, reason] of reasons) {
+    fireEvent.click(screen.getByLabelText(box))
+    expect(screen.getByLabelText(box)).not.toBeChecked()
+    expect(screen.getByRole('alert')).toHaveTextContent(reason)
+  }
+})
+
+it('asks before re-running replaces manual changes, and keeps them on cancel', async () => {
+  await editEdgeCases()
+  // No manual changes yet, so re-running needs no confirmation.
+  fireEvent.click(screen.getByRole('button', { name: 'Re-run matching' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByLabelText('Match Bob with Aero (Engineering)'))
+  fireEvent.click(screen.getByRole('button', { name: 'Re-run matching' }))
+  expect(screen.getByRole('dialog')).toHaveTextContent('1 student changed by hand')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByLabelText('Match Bob with Aero (Engineering)')).not.toBeChecked()
+  fireEvent.click(screen.getByRole('button', { name: 'Re-run matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Replace manual changes' }))
+  expect(screen.getByLabelText('Match Bob with Aero (Engineering)')).toBeChecked()
+  expect(screen.queryByText(/^Manually/)).not.toBeInTheDocument()
 })

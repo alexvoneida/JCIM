@@ -37,6 +37,11 @@ function optionalNumber(form: FormData, name: string) {
   const value = field(form, name)
   return value ? Number(value) : undefined
 }
+// Time inputs cannot show placeholders, so inherited times are prefilled and only differences are saved.
+function overrideTime(form: FormData, name: string, inherited: string) {
+  const value = field(form, name)
+  return value && value !== inherited ? value : undefined
+}
 
 type InterviewDraft = { interview?: ScheduledInterview; employer?: string; time?: string }
 
@@ -57,6 +62,13 @@ export default function SchedulePage({
   const global = scheduleSettings(data)
   const employers = data.employers.filter((e) => e.active)
   const students = Object.values(data.students)
+  const draftEmployer =
+    employers.find(
+      (e) => e.name === (interviewEditor?.employer ?? interviewEditor?.interview?.employer)
+    ) ?? employers[0]
+  const draftDuration = draftEmployer
+    ? employerSchedule(data, draftEmployer).durationMinutes
+    : global.durationMinutes
   const issues = scheduleIssues(data)
   const dateLabel = data.interviewDate
     ? new Date(`${data.interviewDate}T12:00:00`).toLocaleDateString(undefined, {
@@ -135,8 +147,8 @@ export default function SchedulePage({
       onChange({ ...data, scheduleSettings: settings, scheduleApproved: false })
     } else {
       const scheduling: EmployerScheduling = {
-        start: field(form, 'start') || undefined,
-        end: field(form, 'end') || undefined,
+        start: overrideTime(form, 'start', global.start),
+        end: overrideTime(form, 'end', global.end),
         durationMinutes: optionalNumber(form, 'duration'),
         parallelInterviews: optionalNumber(form, 'parallel')
       }
@@ -425,7 +437,7 @@ export default function SchedulePage({
         >
           <form onSubmit={saveSettings} noValidate>
             {editorEmployer && (
-              <p className="small muted">Leave a field blank to use the overall setting.</p>
+              <p className="small muted">Gray values come from the overall settings.</p>
             )}
             <div className="schedule-form-grid">
               <label>
@@ -433,9 +445,11 @@ export default function SchedulePage({
                 <input
                   type="time"
                   name="start"
-                  defaultValue={
-                    editorEmployer ? (editorEmployer.scheduling?.start ?? '') : global.start
+                  defaultValue={editorEmployer?.scheduling?.start ?? global.start}
+                  className={
+                    editorEmployer && !editorEmployer.scheduling?.start ? 'inherited' : undefined
                   }
+                  onChange={(e) => e.currentTarget.classList.remove('inherited')}
                 />
               </label>
               <label>
@@ -443,9 +457,11 @@ export default function SchedulePage({
                 <input
                   type="time"
                   name="end"
-                  defaultValue={
-                    editorEmployer ? (editorEmployer.scheduling?.end ?? '') : global.end
+                  defaultValue={editorEmployer?.scheduling?.end ?? global.end}
+                  className={
+                    editorEmployer && !editorEmployer.scheduling?.end ? 'inherited' : undefined
                   }
+                  onChange={(e) => e.currentTarget.classList.remove('inherited')}
                 />
               </label>
             </div>
@@ -515,6 +531,9 @@ export default function SchedulePage({
               <select
                 name="employer"
                 defaultValue={interviewEditor.interview?.employer ?? interviewEditor.employer}
+                onChange={(e) =>
+                  setInterviewEditor({ ...interviewEditor, employer: e.target.value })
+                }
               >
                 {employers.map((e) => (
                   <option key={e.name}>{e.name}</option>
@@ -533,31 +552,32 @@ export default function SchedulePage({
                 />
               </label>
               <label>
-                Round
+                Length override (minutes)
                 <input
                   type="number"
-                  name="round"
+                  name="duration"
+                  aria-label="Interview length override (minutes)"
+                  aria-describedby="duration-override-help"
                   min="1"
+                  max="1440"
                   step="1"
-                  defaultValue={interviewEditor.interview?.round ?? 1}
+                  defaultValue={interviewEditor.interview?.durationMinutes ?? ''}
+                  placeholder={String(draftDuration)}
                 />
+                <span className="field-help" id="duration-override-help">
+                  Leave blank to use the employer’s interview length.
+                </span>
               </label>
             </div>
             <label>
-              Interview length override (minutes)
+              Round
               <input
                 type="number"
-                name="duration"
-                aria-label="Interview length override (minutes)"
-                aria-describedby="duration-override-help"
+                name="round"
                 min="1"
-                max="1440"
                 step="1"
-                defaultValue={interviewEditor.interview?.durationMinutes ?? ''}
+                defaultValue={interviewEditor.interview?.round ?? 1}
               />
-              <span className="field-help" id="duration-override-help">
-                Leave blank to use the employer’s interview length.
-              </span>
             </label>
             {error && (
               <p className="form-error" role="alert">
