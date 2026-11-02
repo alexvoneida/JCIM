@@ -21,8 +21,9 @@ export function matchingInput(data: Workspace): MatchingInput {
   const feedback = latestFeedback(data)
   const eligible = feedback.filter(
     (i) =>
-      // Students cannot decline; a low rating (1/5) is how they show less interest.
+      // Both sides must want the match: the employer approved and the student did not decline.
       i.employerAccept === true &&
+      i.acceptance !== false &&
       preference(i) !== undefined &&
       active.some((e) => e.name === i.business)
   )

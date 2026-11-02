@@ -42,11 +42,10 @@ it('uses the latest round and never reuses earlier approval after an employer de
   data.students.Alice.interviewResults.push(later)
   expect(matchInternships(matchingInput(data)).unmatchedStudents).toContain('Alice')
 })
-it('ignores the old student acceptance answer, so students cannot decline', () => {
+it('never places a student with an employer they declined', () => {
   const data = fixture()
-  for (const s of Object.values(data.students))
-    for (const i of s.interviewResults) i.acceptance = false
-  expect(matchInternships(matchingInput(data)).unmatchedStudents).toEqual([])
+  data.students.Alice.interviewResults[0].acceptance = false
+  expect(matchInternships(matchingInput(data)).unmatchedStudents).toEqual(['Alice'])
 })
 it('places every student within capacity and detects schedule overlaps', () => {
   const data = fixture()

@@ -45,6 +45,16 @@ export interface Placement {
   rating: 1 | 2 | 3 | 4 | 5
 }
 
+// One change to the matching, as a before/after pair. Approvals group the changes before them,
+// like commits.
+export interface HistoryEntry {
+  time: string
+  kind: 'generate' | 'placement' | 'feedback' | 'cleared' | 'approve'
+  summary: string
+  before?: string
+  after?: string
+}
+
 export interface Workspace {
   students: Record<string, Student>
   employers: Employer[]
@@ -52,6 +62,10 @@ export interface Workspace {
   schedule: ScheduledInterview[]
   scheduleSettings?: ScheduleSettings
   placements: Placement[]
+  // The last generated matching, so manual edits can be told apart. Emptied with placements;
+  // missing for imported workspaces, where the origin of placements is unknown.
+  autoPlacements?: Placement[]
+  history?: HistoryEntry[]
   scheduleApproved: boolean
   matchingApproved: boolean
   interviewDate: string
