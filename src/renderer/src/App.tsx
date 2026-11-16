@@ -6,15 +6,16 @@ import {
   type Placement,
   type SheetError
 } from '../../shared/workspace'
+import type { EmployerScheduling, ScheduledInterview, Wave } from '../../shared/workspace'
 import { industryBank, industryName, rememberIndustries } from '../../shared/industries'
 import SchedulePage from './SchedulePage'
 import Modal from './Modal'
 import FindBar from './FindBar'
 import HistoryView from './HistoryView'
 import { placementLabel, recordHistory } from './history'
-import { scheduleSettings, scheduleIssues, settingsError } from '../../shared/scheduling'
+import { convertTimedSchedule, scheduleIssues, type TimedInterview } from '../../shared/scheduling'
 import IndustryPicker, { OTHER_INDUSTRY } from './IndustryPicker'
-import type { Student } from '../../shared/student'
+import { Student } from '../../shared/student'
 import { InterviewResult } from '../../shared/interviewResult'
 import { generateSchedule, latestFeedback, matchingInput, preference } from './workspace-flow'
 import { canFill, matchInternships } from './matching'
@@ -51,6 +52,7 @@ type IconName =
   | 'check'
   | 'file'
   | 'close'
+  | 'trash'
 const storageKey = 'jcim-workspace-v1'
 
 function Icon({ name }: { name: IconName }) {
@@ -103,7 +105,8 @@ function Icon({ name }: { name: IconName }) {
         <path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8M8 16h8" />
       </>
     ),
-    close: <path d="m6 6 12 12M6 18 18 6" />
+    close: <path d="m6 6 12 12M6 18 18 6" />,
+    trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />
   }
   return (
     <svg
@@ -196,11 +199,44 @@ function Empty({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
+// Workspaces saved before waves existed: interviews had start times with `round` holding the
+// tracker's wave number, employers had hours and a parallel limit, and there was a schedule window.
+type SavedWorkspace = Omit<Workspace, 'waves' | 'schedule' | 'employers'> & {
+  waves?: Wave[]
+  schedule: (ScheduledInterview | TimedInterview)[]
+  employers: (Employer & { scheduling?: EmployerScheduling & { parallelInterviews?: number } })[]
+  scheduleSettings?: unknown
+}
+const isTimed = (interview: ScheduledInterview | TimedInterview): interview is TimedInterview =>
+  typeof (interview as TimedInterview).time === 'string'
+function upgradeSaved(value: SavedWorkspace): Workspace {
+  if (!value || typeof value !== 'object' || !Array.isArray(value.schedule))
+    return value as unknown as Workspace
+  const timed = value.schedule.filter(isTimed)
+  const converted = timed.length ? convertTimedSchedule(timed, value.waves ?? []) : undefined
+  const employers: Employer[] = Array.isArray(value.employers)
+    ? value.employers.map((e) =>
+        e?.scheduling && 'parallelInterviews' in e.scheduling
+          ? { ...e, scheduling: { studentsPerRound: e.scheduling.parallelInterviews } }
+          : e
+      )
+    : value.employers
+  const rest: SavedWorkspace = { ...value }
+  delete rest.scheduleSettings
+  return {
+    ...rest,
+    employers,
+    waves: converted?.waves ?? value.waves ?? [],
+    schedule:
+      converted?.schedule ?? value.schedule.filter((i): i is ScheduledInterview => !isTimed(i))
+  }
+}
+
 function restore(): { workspace: Workspace; notice: Notice | null } {
   try {
     const saved = localStorage.getItem(storageKey)
     if (!saved) return { workspace: emptyWorkspace(), notice: null }
-    const value = JSON.parse(saved) as Workspace
+    const value = upgradeSaved(JSON.parse(saved) as SavedWorkspace)
     if (
       !value ||
       !value.students ||
@@ -212,7 +248,18 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
       !Array.isArray(value.placements) ||
       typeof value.interviewDate !== 'string' ||
       typeof value.scheduleApproved !== 'boolean' ||
-      (value.scheduleSettings !== undefined && !!settingsError(value.scheduleSettings)) ||
+      !Array.isArray(value.waves) ||
+      !value.waves.every(
+        (w) =>
+          w &&
+          typeof w.name === 'string' &&
+          Number.isSafeInteger(w.rounds) &&
+          w.rounds >= 1 &&
+          Array.isArray(w.schools) &&
+          w.schools.every((s) => typeof s === 'string') &&
+          Array.isArray(w.students) &&
+          w.students.every((s) => typeof s === 'string')
+      ) ||
       typeof value.matchingApproved !== 'boolean' ||
       !value.employers.every(
         (e) =>
@@ -234,14 +281,9 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
                   r.capacity >= 0
               ))) &&
           (!e.scheduling ||
-            ((e.scheduling.start === undefined || typeof e.scheduling.start === 'string') &&
-              (e.scheduling.end === undefined || typeof e.scheduling.end === 'string') &&
-              (e.scheduling.durationMinutes === undefined ||
-                (Number.isSafeInteger(e.scheduling.durationMinutes) &&
-                  e.scheduling.durationMinutes > 0)) &&
-              (e.scheduling.parallelInterviews === undefined ||
-                (Number.isSafeInteger(e.scheduling.parallelInterviews) &&
-                  e.scheduling.parallelInterviews > 0))))
+            e.scheduling.studentsPerRound === undefined ||
+            (Number.isSafeInteger(e.scheduling.studentsPerRound) &&
+              e.scheduling.studentsPerRound > 0))
       ) ||
       !Object.entries(value.students).every(
         ([name, student]) =>
@@ -268,10 +310,9 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
         (i) =>
           i &&
           typeof i.id === 'string' &&
-          typeof i.time === 'string' &&
-          (i.durationMinutes === undefined ||
-            (Number.isSafeInteger(i.durationMinutes) && i.durationMinutes > 0)) &&
-          /^([01]\d|2[0-3]):[0-5]\d$/.test(i.time) &&
+          typeof i.wave === 'string' &&
+          Number.isSafeInteger(i.round) &&
+          i.round >= 1 &&
           Object.hasOwn(value.students, i.student) &&
           value.employers.some((e) => e.name === i.employer && e.active)
       ) ||
@@ -288,7 +329,7 @@ function restore(): { workspace: Workspace; notice: Notice | null } {
     )
       throw new Error('The saved data is damaged or in an unsupported format.')
     return {
-      workspace: rememberIndustries({ ...value, scheduleSettings: scheduleSettings(value) }),
+      workspace: rememberIndustries(value),
       notice: null
     }
   } catch (error) {
@@ -315,7 +356,10 @@ export default function App() {
   const [employerStatus, setEmployerStatus] = useState('all')
   const [employerForm, setEmployerForm] = useState<Employer | 'new' | null>(null)
   const [studentDetail, setStudentDetail] = useState<Student | null>(null)
+  const [studentForm, setStudentForm] = useState(false)
+  const [studentToRemove, setStudentToRemove] = useState<string | null>(null)
   const [confirmImport, setConfirmImport] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
   const [editSchedule, setEditSchedule] = useState(false)
   const [editMatching, setEditMatching] = useState(false)
   const [matchingView, setMatchingView] = useState<'approvals' | 'students' | 'history'>(
@@ -385,10 +429,7 @@ export default function App() {
 
   function commit(next: Workspace) {
     next = recordHistory(data, next)
-    next = rememberIndustries({
-      ...next,
-      scheduleSettings: next.scheduleSettings ?? scheduleSettings(next)
-    })
+    next = rememberIndustries(next)
     setData(next)
     try {
       localStorage.setItem(storageKey, JSON.stringify(next))
@@ -459,6 +500,22 @@ export default function App() {
   function requestImport() {
     if (students.length || data.employers.length) setConfirmImport(true)
     else void importSheet()
+  }
+  function clearWorkspace() {
+    setConfirmClear(false)
+    try {
+      localStorage.removeItem(storageKey)
+    } catch (error) {
+      showError({
+        title: 'Workspace could not be cleared',
+        detail: error instanceof Error ? error.message : String(error),
+        fix: 'Restart the app and try again.'
+      })
+      return
+    }
+    setData(emptyWorkspace())
+    setNotice(null)
+    changePage('overview')
   }
   function toggleEmployer(employer: Employer) {
     commit({
@@ -555,6 +612,56 @@ export default function App() {
     setStudentDetail(student)
     setFormError('')
   }
+  function saveStudent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const name = formValue(form, 'name').trim().replace(/\s+/g, ' ')
+    if (!name) {
+      setFormError('Enter the student’s name.')
+      return
+    }
+    if (
+      Object.keys(data.students).some((existing) => existing.toLowerCase() === name.toLowerCase())
+    ) {
+      setFormError(`A student named “${name}” already exists.`)
+      return
+    }
+    const selected = industrySelection(form, 'interests', industries)
+    if (selected.error) {
+      setFormError(selected.error)
+      return
+    }
+    const student = Object.assign(new Student(), {
+      name,
+      school: formValue(form, 'school').trim(),
+      grade: formValue(form, 'grade').trim() || undefined,
+      interests: selected.values
+    })
+    commit({ ...data, students: { ...data.students, [name]: student } })
+    setStudentForm(false)
+    setFormError('')
+  }
+  function removeStudent(name: string) {
+    const students = Object.fromEntries(
+      Object.entries(data.students).filter(([key]) => key !== name)
+    )
+    const schedule = data.schedule.filter((i) => i.student !== name)
+    // A freed place can change the generated matching, so it is cleared like after any
+    // employer change rather than patched.
+    const matching = data.placements.some((p) => p.student === name)
+      ? { placements: [], autoPlacements: [], matchingApproved: false }
+      : {}
+    commit({
+      ...data,
+      students,
+      waves: data.waves.map((w) => ({ ...w, students: w.students.filter((s) => s !== name) })),
+      schedule,
+      scheduleApproved: data.scheduleApproved && schedule.length === data.schedule.length,
+      ...matching
+    })
+    setStudentToRemove(null)
+    setStudentDetail(null)
+  }
   function removeIndustry(industry: string) {
     const other = (value: string) =>
       industryName(value).toLowerCase() !== industryName(industry).toLowerCase()
@@ -586,21 +693,21 @@ export default function App() {
   function generateInterviews() {
     setConfirmRegenerate(false)
     try {
-      const interviews = generateSchedule(data)
+      const { schedule: interviews, waves, students } = generateSchedule(data)
       if (!interviews.length) {
         showError({
           title: 'Nothing to schedule',
-          detail: 'No interviews are linked to active employers.',
-          fix: 'Activate employers on the Employers page, or add interviews with Edit schedule.'
+          detail: 'There are no students to schedule.',
+          fix: 'Import a workbook or add students first.'
         })
         return
       }
-      commit({ ...data, schedule: interviews, scheduleApproved: false })
+      commit({ ...data, waves, students, schedule: interviews, scheduleApproved: false })
     } catch (error) {
       showError({
         title: 'Schedule could not be generated',
         detail: error instanceof Error ? error.message : String(error),
-        fix: 'Adjust the schedule window or employer interview settings and try again.'
+        fix: 'Add rounds to the wave, raise Students per round for the employer, or place the student in another wave, then try again.'
       })
     }
   }
@@ -858,6 +965,14 @@ export default function App() {
             </div>
           </div>
           <div className="toolbar-actions">
+            <button
+              className="danger"
+              onClick={() => setConfirmClear(true)}
+              disabled={!!busy || (!students.length && !data.employers.length)}
+            >
+              <Icon name="trash" />
+              Clear workspace
+            </button>
             <button onClick={requestImport} disabled={!!busy}>
               <Icon name="import" />
               {busy === 'import' ? 'Importing…' : 'Import workbook'}
@@ -903,6 +1018,18 @@ export default function App() {
         <header className="page-header">
           <h1>{title}</h1>
           <div className="page-actions">
+            {page === 'overview' && (
+              <button
+                className="primary"
+                onClick={() => {
+                  setStudentForm(true)
+                  setFormError('')
+                }}
+              >
+                <Icon name="plus" />
+                New student
+              </button>
+            )}
             {page === 'employers' && (
               <button
                 className="primary"
@@ -933,7 +1060,7 @@ export default function App() {
                     if (!data.interviewDate) {
                       showError({
                         title: 'Choose an interview date first',
-                        detail: 'Set the interview date above the timetable, then approve.'
+                        detail: 'Set the interview date above the schedule, then approve.'
                       })
                       return
                     }
@@ -1004,7 +1131,10 @@ export default function App() {
             )}
             {!students.length ? (
               <Empty title="No students yet">
-                <p>Import the internship tracker or a previous JCIM export (.xlsx).</p>
+                <p>
+                  Import the internship tracker or a previous JCIM export (.xlsx), or add students
+                  one at a time with New student.
+                </p>
               </Empty>
             ) : !filteredStudents.length ? (
               <Empty title="No students found">
@@ -1506,6 +1636,21 @@ export default function App() {
           </div>
         </Modal>
       )}
+      {confirmClear && (
+        <Modal title="Clear the workspace?" onClose={() => setConfirmClear(false)}>
+          <p>
+            This removes all students, employers, schedules, matches, and history saved on this
+            computer, and the app starts empty. Export first to keep a copy. Imported and exported
+            files are not changed.
+          </p>
+          <div className="modal-actions">
+            <button onClick={() => setConfirmClear(false)}>Cancel</button>
+            <button className="danger" onClick={clearWorkspace}>
+              Clear workspace
+            </button>
+          </div>
+        </Modal>
+      )}
       {employerForm && (
         <Modal
           title={employerForm === 'new' ? 'New employer' : 'Edit employer'}
@@ -1578,8 +1723,8 @@ export default function App() {
       {confirmRegenerate && (
         <Modal title="Replace the current schedule?" onClose={() => setConfirmRegenerate(false)}>
           <p>
-            All interview times and per-interview length overrides will be replaced. Schedule and
-            employer settings are kept.
+            Every interview is placed into a round again, replacing manual moves. Waves, their
+            school and student placements, and employer limits are kept.
           </p>
           <div className="modal-actions">
             <button onClick={() => setConfirmRegenerate(false)}>Cancel</button>
@@ -1649,10 +1794,59 @@ export default function App() {
             <p className="muted">No interviews recorded.</p>
           )}
           <div className="modal-actions">
+            <button className="danger" onClick={() => setStudentToRemove(studentDetail.name)}>
+              Remove student
+            </button>
             <button className="primary" onClick={() => setStudentDetail(null)}>
               Done
             </button>
           </div>
+        </Modal>
+      )}
+      {studentToRemove && (
+        <Modal title={`Remove ${studentToRemove}?`} onClose={() => setStudentToRemove(null)}>
+          <p>
+            This removes the student together with their interview feedback, scheduled interviews,
+            and placement. Imported and exported files are not changed.
+          </p>
+          <div className="modal-actions">
+            <button onClick={() => setStudentToRemove(null)}>Cancel</button>
+            <button className="danger" onClick={() => removeStudent(studentToRemove)}>
+              Remove student
+            </button>
+          </div>
+        </Modal>
+      )}
+      {studentForm && (
+        <Modal title="New student" onClose={() => setStudentForm(false)}>
+          <form onSubmit={saveStudent} noValidate>
+            <label>
+              Student name
+              <input name="name" />
+            </label>
+            <label>
+              School (optional)
+              <input name="school" />
+            </label>
+            <label>
+              Grade (optional)
+              <input name="grade" />
+            </label>
+            <IndustryPicker bank={industries} initial={[]} name="interests" multiple />
+            {formError && (
+              <p className="form-error" role="alert">
+                {formError}
+              </p>
+            )}
+            <div className="modal-actions">
+              <button type="button" onClick={() => setStudentForm(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="primary">
+                Save student
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
       {industryToRemove && (

@@ -56,4 +56,4 @@ export function matchingInput(data: Workspace): MatchingInput {
   }
 }
 
-export { generateSchedule, scheduleConflict, minutes, timeLabel } from '../../shared/scheduling'
+export { generateSchedule, scheduleConflict } from '../../shared/scheduling'

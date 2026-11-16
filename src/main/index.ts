@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { IpcChannel } from '../shared/api'
 import { parseSheet, exportSheet } from './excel'
@@ -79,6 +80,15 @@ if (!app.requestSingleInstanceLock()) {
       ipcMain.handle(IpcChannel.exportSheet, exportSheet)
 
       createWindow()
+
+      // Earlier versions kept a copy of every imported tracker here so exports could carry
+      // its tabs. Exports no longer do, so the copies are only wasted disk space.
+      rm(join(app.getPath('userData'), 'imported-workbooks'), {
+        recursive: true,
+        force: true
+      }).catch((error: unknown) =>
+        console.error('Could not remove the imported-workbooks folder', error)
+      )
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
-import { basename, dirname, extname, join, resolve } from 'node:path'
-import { copyFile, mkdir, rename, rm } from 'node:fs/promises'
+import { BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron'
+import { basename, dirname, extname, join } from 'node:path'
+import { rename, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import ExcelJS from 'exceljs'
 import type { Workspace, SheetResult } from '../shared/workspace'
@@ -24,16 +24,11 @@ export async function parseSheet(): Promise<SheetResult<Workspace>> {
     const workbook = new ExcelJS.Workbook()
     await workbook.xlsx.readFile(path)
     const { workspace, warnings } = readWorkbook(workbook)
-    const cacheFolder = join(app.getPath('userData'), 'imported-workbooks')
-    await mkdir(cacheFolder, { recursive: true })
-    const sourceSnapshotPath = join(cacheFolder, `${randomUUID()}.xlsx`)
-    await copyFile(path, sourceSnapshotPath)
     return {
       status: 'success',
       data: {
         ...workspace,
         sourcePath: path,
-        sourceSnapshotPath,
         sourceName: basename(path),
         importedAt: new Date().toISOString()
       },
@@ -67,16 +62,7 @@ export async function exportSheet(
         detail: 'The destination must end in .xlsx.',
         fix: 'Choose a filename such as JCIM-workspace.xlsx.'
       })
-    if (data.sourcePath && resolve(path) === resolve(data.sourcePath))
-      throw new WorkbookIssue({
-        title: 'Choose a new export filename',
-        detail: 'The destination is the original imported workbook.',
-        fix: 'Use a different filename to keep the source tracker intact.'
-      })
-    const workbook = new ExcelJS.Workbook()
-    const source = data.sourceSnapshotPath ?? data.sourcePath
-    if (source) await workbook.xlsx.readFile(source)
-    writeWorkspace(workbook, data)
+    const workbook = writeWorkspace(data)
     // Complete the workbook beside the destination before replacing any existing export.
     temporaryPath = join(dirname(path), `.jcim-${randomUUID()}.xlsx`)
     await workbook.xlsx.writeFile(temporaryPath)

@@ -51,9 +51,7 @@ export async function createTracker(path: string) {
     potential.addRow([
       name,
       '',
-      ['Advanced manufacturing', 'Aerospace systems', 'Enterprise software', 'Financial services'][
-        i
-      ],
+      ['Manufacturing', 'Aerospace', 'Software', 'Finance'][i],
       '',
       'Yes',
       true,

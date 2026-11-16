@@ -43,6 +43,15 @@ function choosePlacement(student: string, label: string) {
   fireEvent.change(select, { target: { value: option.value } })
 }
 
+function scheduleFixture() {
+  const data = fixture()
+  data.employers.push(
+    { name: 'Software', industry: 'Software', capacity: 1, active: true },
+    { name: 'Finance', industry: 'Finance', capacity: 1, active: true }
+  )
+  return data
+}
+
 async function importData() {
   fireEvent.click(screen.getByRole('button', { name: 'Import workbook' }))
   await screen.findByRole('heading', { name: 'Alice' })
@@ -61,6 +70,99 @@ it('shows the redesigned flow and explicit sheet actions', () => {
   const nav = screen.getByRole('navigation', { name: 'Workspace pages' })
   for (const name of ['Students', 'Interview Schedule', 'Matching', 'Employers'])
     expect(within(nav).getByRole('button', { name })).toBeInTheDocument()
+})
+it('clears the workspace only after confirmation and forgets it between sessions', async () => {
+  const app = render(<App />)
+  expect(screen.getByRole('button', { name: 'Clear workspace' })).toBeDisabled()
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Clear workspace' }))
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument()
+  expect(savedWorkspace().students.Alice).toBeDefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Clear workspace' }))
+  fireEvent.click(
+    within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear workspace' })
+  )
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'No students yet' })).toBeInTheDocument()
+  expect(screen.getByText('No workbook imported')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Export workbook' })).toBeDisabled()
+  expect(localStorage.getItem('jcim-workspace-v1')).toBeNull()
+  app.unmount()
+  render(<App />)
+  expect(screen.getByRole('heading', { name: 'No students yet' })).toBeInTheDocument()
+})
+it('adds a student by hand, rejects blank and duplicate names, and removes a student', () => {
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'New student' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save student' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('Enter the student’s name.')
+  fireEvent.change(screen.getByLabelText('Student name'), { target: { value: ' Bob  Lee ' } })
+  fireEvent.change(screen.getByLabelText('School (optional)'), {
+    target: { value: 'Golden High' }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Save student' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Bob Lee' })).toBeInTheDocument()
+  expect(screen.getByText('Golden High')).toBeInTheDocument()
+  expect(savedWorkspace().students['Bob Lee']).toMatchObject({
+    name: 'Bob Lee',
+    school: 'Golden High',
+    interests: [],
+    interviewResults: []
+  })
+  expect(screen.getByRole('button', { name: 'Export workbook' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: 'New student' }))
+  fireEvent.change(screen.getByLabelText('Student name'), { target: { value: 'bob lee' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save student' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('already exists')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  fireEvent.click(screen.getByRole('heading', { name: 'Bob Lee' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove student' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByRole('dialog', { name: 'Bob Lee' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Remove student' }))
+  fireEvent.click(
+    within(screen.getByRole('dialog', { name: 'Remove Bob Lee?' })).getByRole('button', {
+      name: 'Remove student'
+    })
+  )
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'No students yet' })).toBeInTheDocument()
+  expect(savedWorkspace().students).toEqual({})
+})
+it('removing a scheduled and matched student clears the matching and schedule approval', async () => {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: scheduleFixture(),
+    warnings: []
+  })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
+  fireEvent.click(screen.getAllByRole('button', { name: 'Generate schedule' })[0])
+  fireEvent.change(screen.getByLabelText('Interview date'), { target: { value: '2026-10-15' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Approve schedule' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Matching' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Generate matching' }))
+  expect(savedWorkspace()).toMatchObject({ scheduleApproved: true })
+  expect(savedWorkspace().placements).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Students' }))
+  fireEvent.click(screen.getByRole('heading', { name: 'Alice' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove student' }))
+  fireEvent.click(
+    within(screen.getByRole('dialog', { name: 'Remove Alice?' })).getByRole('button', {
+      name: 'Remove student'
+    })
+  )
+  expect(screen.getByRole('heading', { name: 'No students yet' })).toBeInTheDocument()
+  expect(savedWorkspace()).toMatchObject({
+    students: {},
+    schedule: [],
+    placements: [],
+    scheduleApproved: false,
+    matchingApproved: false
+  })
 })
 it('imports real workspace data, shows import notes, and exports the complete workspace', async () => {
   render(<App />)
@@ -94,6 +196,11 @@ it('turns employers off, preserves feedback and export rows, and restores the st
   expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
 })
 it('requires a schedule date before approval and invalidates approval on edits', async () => {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: scheduleFixture(),
+    warnings: []
+  })
   render(<App />)
   await importData()
   fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
@@ -106,80 +213,94 @@ it('requires a schedule date before approval and invalidates approval on edits',
   fireEvent.change(screen.getByLabelText('Interview date'), { target: { value: '2026-10-16' } })
   expect(screen.getByRole('button', { name: 'Approve schedule' })).toBeEnabled()
 })
-it('edits overall and employer settings, aligns simultaneous students, and persists interview overrides', async () => {
-  const data = fixture()
-  data.students.Bob = Object.assign(new Student(), { name: 'Bob' })
-  data.students.Bob.interviewResults.push(
-    new InterviewResult('Bob', '1', 'Aero', '', '', '', '', '0')
-  )
+it('creates Wave 1 when none exists, limits students per round, and keeps the schedule after reopening', async () => {
+  const data = scheduleFixture()
+  data.employers.push({ name: 'Farm', industry: 'Agriculture', capacity: 1, active: true })
+  for (const [name, school] of [
+    ['Bob', 'Golden High'],
+    ['Cara', 'Golden High'],
+    ['Dave', 'Lakewood High'],
+    ['Eve', 'Lakewood High']
+  ])
+    data.students[name] = Object.assign(new Student(), { name, school })
   vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
   const app = render(<App />)
   await importData()
   fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Edit schedule window and interview length' }))
-  fireEvent.change(screen.getByLabelText('Schedule end time'), { target: { value: '12:00' } })
-  fireEvent.change(screen.getByLabelText('Default interview length (minutes)'), {
-    target: { value: '20' }
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'Save schedule settings' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Edit interview settings for Aero' }))
-  fireEvent.change(screen.getByLabelText('Employer start time'), { target: { value: '09:15' } })
-  fireEvent.change(screen.getByLabelText('Employer end time'), { target: { value: '11:00' } })
-  fireEvent.change(screen.getByLabelText('Employer interview length (minutes)'), {
-    target: { value: '15' }
-  })
-  fireEvent.change(screen.getByLabelText(/Students at once/), { target: { value: '2' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save employer settings' }))
   fireEvent.click(screen.getAllByRole('button', { name: 'Generate schedule' })[0])
-  const cards = app.container.querySelectorAll<HTMLElement>('.timetable-interview')
-  expect(cards).toHaveLength(2)
-  expect(cards[0].dataset.start).toBe('09:15')
-  expect(cards[1].dataset.start).toBe('09:15')
-  expect(cards[0].style.gridRow).toBe(cards[1].style.gridRow)
-  expect(cards[0].style.marginLeft).not.toBe(cards[1].style.marginLeft)
+  const chips = (student: string) =>
+    [...document.querySelectorAll<HTMLElement>(`.student-chip[data-student="${student}"]`)].map(
+      (chip) => chip.closest('td')!.dataset
+    )
+  const atAero = (round: number) =>
+    document.querySelectorAll(`td[data-employer="Aero"][data-round="${round}"] .student-chip`)
+  for (const student of ['Alice', 'Bob', 'Cara', 'Dave', 'Eve']) {
+    expect(chips(student)).toHaveLength(3)
+    expect(new Set(chips(student).map((c) => c.round))).toEqual(new Set(['1', '2', '3']))
+    expect(new Set(chips(student).map((c) => c.employer)).size).toBe(3)
+  }
+  const alice = document.querySelector<HTMLElement>('.student-chip[data-student="Alice"]')!
+  const bob = document.querySelector<HTMLElement>('.student-chip[data-student="Bob"]')!
+  expect(alice.getAttribute('style')).toContain('background')
+  expect(alice.getAttribute('style')).not.toBe(bob.getAttribute('style'))
+  expect(screen.getByRole('list', { name: 'School colors' })).toHaveTextContent('Golden High')
+  // Fifteen interviews over four employers leave Aero with four, so one round doubles up.
+  expect([1, 2, 3].map((round) => atAero(round).length).sort()).toEqual([1, 1, 2])
+  fireEvent.click(screen.getByRole('button', { name: 'Edit interview settings for Aero' }))
+  fireEvent.change(screen.getByLabelText('Students per round'), { target: { value: '1' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save employer settings' }))
+  expect(screen.getByText('2 scheduling issues')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Generate schedule' }))
+  fireEvent.click(
+    within(screen.getByRole('dialog')).getByRole('button', { name: 'Replace schedule' })
+  )
+  expect(screen.queryByText(/scheduling issue/)).not.toBeInTheDocument()
+  expect([1, 2, 3].map((round) => atAero(round).length)).toEqual([1, 1, 1])
   fireEvent.change(screen.getByLabelText('Interview date'), { target: { value: '2026-10-15' } })
   fireEvent.click(screen.getByRole('button', { name: 'Approve schedule' }))
   fireEvent.click(screen.getByRole('button', { name: 'Edit schedule' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Edit interview for Bob at Aero, round 1' }))
-  fireEvent.change(screen.getByLabelText('Start time'), { target: { value: '10:00' } })
-  fireEvent.change(screen.getByLabelText(/Interview length override/), { target: { value: '10' } })
+  // Every round is taken, so the dialog refuses a round the student already interviews in.
+  const mover = (atAero(2)[0] as HTMLElement).dataset.student!
+  fireEvent.click(
+    screen.getByRole('button', { name: `Edit interview for ${mover} at Aero, Wave 1 round 2` })
+  )
+  fireEvent.change(screen.getByLabelText('Round'), { target: { value: '3' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save interview' }))
-  expect(screen.getByRole('button', { name: 'Approve schedule' })).toBeEnabled()
-  expect(screen.getByText('10 min · override')).toBeInTheDocument()
+  expect(screen.getByRole('alert')).toHaveTextContent(`${mover} is booked twice in Wave 1 round 3`)
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByRole('button', { name: 'Schedule approved' })).toBeDisabled()
   fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
   await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
   const saved = vi.mocked(window.api.exportSheet).mock.calls[0][0]
-  expect(saved.scheduleSettings).toEqual({ start: '09:00', end: '12:00', durationMinutes: 20 })
-  expect(saved.employers[0].scheduling).toEqual({
-    start: '09:15',
-    end: '11:00',
-    durationMinutes: 15,
-    parallelInterviews: 2
-  })
-  expect(saved.schedule.find((i) => i.student === 'Bob')).toMatchObject({
-    time: '10:00',
-    durationMinutes: 10
-  })
+  expect(saved.waves).toEqual([{ name: 'Wave 1', rounds: 3, schools: [], students: [] }])
+  expect(saved.employers[0].scheduling).toEqual({ studentsPerRound: 1 })
+  expect(saved.schedule).toHaveLength(15)
+  expect(new Set(saved.students.Bob.interviewResults.map((i) => i.business)).size).toBe(3)
   app.unmount()
   render(<App />)
   fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
-  expect(screen.getByText('10 min · override')).toBeInTheDocument()
+  expect((atAero(2)[0] as HTMLElement).dataset.student).toBe(mover)
 })
 
-it('keeps existing interviews when settings change, blocks conflicting approval, and confirms regeneration', async () => {
+it('keeps existing interviews when limits change, blocks conflicting approval, and confirms regeneration', async () => {
+  const data = scheduleFixture()
+  data.employers.push({ name: 'Farm', industry: 'Agriculture', capacity: 1, active: true })
+  for (const name of ['Bob', 'Cara', 'Dave', 'Eve'])
+    data.students[name] = Object.assign(new Student(), { name })
+  vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
   render(<App />)
   await importData()
   fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
   fireEvent.click(screen.getAllByRole('button', { name: 'Generate schedule' })[0])
   fireEvent.change(screen.getByLabelText('Interview date'), { target: { value: '2026-10-15' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Edit schedule window and interview length' }))
-  fireEvent.change(screen.getByLabelText('Schedule start time'), { target: { value: '10:00' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save schedule settings' }))
-  expect(screen.getByRole('heading', { name: 'Alice' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Edit interview settings for Aero' }))
+  fireEvent.change(screen.getByLabelText('Students per round'), { target: { value: '1' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save employer settings' }))
+  expect(document.querySelectorAll('.student-chip')).toHaveLength(15)
   expect(screen.getByText(/^\d+ scheduling issues?$/)).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Approve schedule' }))
   expect(
-    screen.getAllByRole('alert').some((a) => a.textContent?.includes('outside this employer'))
+    screen.getAllByRole('alert').some((a) => a.textContent?.includes('already has 1 student'))
   ).toBe(true)
   fireEvent.click(screen.getByRole('button', { name: 'Generate schedule' }))
   const modal = screen.getByRole('dialog', { name: 'Replace the current schedule?' })
@@ -192,62 +313,153 @@ it('keeps existing interviews when settings change, blocks conflicting approval,
   expect(screen.queryByText(/^\d+ scheduling issues?$/)).not.toBeInTheDocument()
 })
 
-it('explains invalid schedule settings and keeps the editor open for correction', async () => {
+it('explains invalid wave and employer settings and keeps the editor open for correction', async () => {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: scheduleFixture(),
+    warnings: []
+  })
   render(<App />)
   await importData()
   fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Edit schedule window and interview length' }))
-  fireEvent.change(screen.getByLabelText('Schedule end time'), { target: { value: '08:00' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save schedule settings' }))
-  expect(screen.getByRole('alert')).toHaveTextContent('end must be later than the start')
-  fireEvent.change(screen.getByLabelText('Schedule end time'), { target: { value: '10:00' } })
-  fireEvent.change(screen.getByLabelText('Default interview length (minutes)'), {
-    target: { value: '0' }
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'Save schedule settings' }))
-  expect(screen.getByRole('alert')).toHaveTextContent('whole number from 1 to 1440 minutes')
+  fireEvent.click(screen.getByRole('button', { name: 'New wave' }))
+  fireEvent.change(screen.getByLabelText('Wave name'), { target: { value: ' ' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save wave' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('Give the wave a name.')
+  fireEvent.change(screen.getByLabelText('Wave name'), { target: { value: 'Wave 1' } })
+  fireEvent.change(screen.getByLabelText('Rounds'), { target: { value: '0' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save wave' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('Rounds must be a whole number from 1 to 50')
+  fireEvent.change(screen.getByLabelText('Rounds'), { target: { value: '2' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save wave' }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'New wave' }))
+  fireEvent.change(screen.getByLabelText('Wave name'), { target: { value: 'wave 1' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save wave' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('already exists')
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   fireEvent.click(screen.getByRole('button', { name: 'Edit interview settings for Aero' }))
-  fireEvent.change(screen.getByLabelText('Employer start time'), { target: { value: '08:00' } })
+  fireEvent.change(screen.getByLabelText('Students per round'), { target: { value: '1.5' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save employer settings' }))
-  expect(screen.getByRole('alert')).toHaveTextContent('outside the overall schedule window')
-  fireEvent.change(screen.getByLabelText('Employer start time'), { target: { value: '' } })
-  fireEvent.change(screen.getByLabelText('Students at once'), { target: { value: '1.5' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save employer settings' }))
-  expect(screen.getByRole('alert')).toHaveTextContent('Students at once must be a whole number')
+  expect(screen.getByRole('alert')).toHaveTextContent('Students per round must be a whole number')
   expect(screen.getByRole('dialog')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  // A wave with two rounds cannot hold three interviews per student.
+  fireEvent.click(screen.getAllByRole('button', { name: 'Generate schedule' })[0])
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Wave 1 has 2 rounds, but every student interviews 3 times'
+  )
+  expect(document.querySelectorAll('.student-chip')).toHaveLength(0)
 })
 
-it('adds interviews from time slots, rejects student overlaps, and removes only the chosen interview', async () => {
-  const data = fixture()
-  data.employers.push({ name: 'Software', industry: 'Software', active: true, capacity: 1 })
+it('adds interviews to a round, rejects double bookings, and removes only the chosen interview', async () => {
+  vi.mocked(window.api.parseSheet).mockResolvedValue({
+    status: 'success',
+    data: scheduleFixture(),
+    warnings: []
+  })
+  render(<App />)
+  await importData()
+  fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
+  fireEvent.click(screen.getAllByRole('button', { name: 'Generate schedule' })[0])
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Wave 1' }))
+  fireEvent.change(screen.getByLabelText('Rounds'), { target: { value: '4' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save wave' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Edit schedule' }))
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Add interview with Software in Wave 1 round 1' })
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Save interview' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('Alice is booked twice in Wave 1 round 1')
+  fireEvent.change(screen.getByLabelText('Round'), { target: { value: '4' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save interview' }))
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Edit interview for Alice at Software, Wave 1 round 4' })
+  )
+  fireEvent.click(screen.getByRole('button', { name: 'Remove from schedule' }))
+  expect(
+    screen.queryByRole('button', { name: 'Edit interview for Alice at Software, Wave 1 round 4' })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.getByRole('button', { name: 'Edit interview for Alice at Aero, Wave 1 round 1' })
+  ).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
+  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
+  const saved = vi.mocked(window.api.exportSheet).mock.calls[0][0]
+  expect(saved.schedule).toHaveLength(3)
+  expect(saved.students.Alice.interviewResults.map((i) => i.business)).toEqual([
+    'Aero',
+    'Software',
+    'Finance'
+  ])
+})
+
+it('drags students between rounds, employers, and waves in edit mode and notes wave placements', async () => {
+  const data = scheduleFixture()
+  data.students.Bob = Object.assign(new Student(), { name: 'Bob', school: 'Golden High' })
   vi.mocked(window.api.parseSheet).mockResolvedValue({ status: 'success', data, warnings: [] })
   render(<App />)
   await importData()
   fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
   fireEvent.click(screen.getAllByRole('button', { name: 'Generate schedule' })[0])
-  fireEvent.click(screen.getByRole('button', { name: 'Edit schedule' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Add interview at 9:00 AM with Software' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Save interview' }))
-  expect(screen.getByRole('alert')).toHaveTextContent('Alice is booked twice')
-  fireEvent.change(screen.getByLabelText('Start time'), { target: { value: '09:30' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Save interview' }))
-  fireEvent.click(
-    screen.getByRole('button', { name: 'Edit interview for Alice at Software, round 1' })
+  fireEvent.click(screen.getByRole('button', { name: 'New wave' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Golden High' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save wave' }))
+  expect(screen.getByText('3 wave placement notes')).toBeInTheDocument()
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Bob’s school, Golden High, is assigned to Wave 2'
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Remove from schedule' }))
-  expect(
-    screen.queryByRole('button', { name: 'Edit interview for Alice at Software, round 1' })
-  ).not.toBeInTheDocument()
-  expect(
-    screen.getByRole('button', { name: 'Edit interview for Alice at Aero, round 1' })
-  ).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Export workbook' }))
-  await waitFor(() => expect(window.api.exportSheet).toHaveBeenCalled())
-  const saved = vi.mocked(window.api.exportSheet).mock.calls[0][0]
-  expect(saved.schedule).toHaveLength(1)
-  expect(saved.students.Alice.interviewResults.map((i) => i.business)).toEqual(['Aero', 'Software'])
+  const cell = (wave: string, round: number, employer: string) =>
+    document.querySelector<HTMLElement>(
+      `td[data-wave="${wave}"][data-round="${round}"][data-employer="${employer}"]`
+    )!
+  const chipIn = (wave: string, round: number, employer: string, student: string) =>
+    cell(wave, round, employer).querySelector<HTMLElement>(
+      `.student-chip[data-student="${student}"]`
+    )
+  const drag = (chip: HTMLElement, target: HTMLElement) => {
+    const store: Record<string, string> = {}
+    const dataTransfer = {
+      setData: (type: string, value: string) => {
+        store[type] = value
+      },
+      getData: (type: string) => store[type] ?? '',
+      effectAllowed: 'all',
+      dropEffect: 'none'
+    }
+    fireEvent.dragStart(chip, { dataTransfer })
+    fireEvent.dragOver(target, { dataTransfer })
+    fireEvent.drop(target, { dataTransfer })
+  }
+  // Alice: Aero 1, Finance 2, Software 3. Bob: Software 1, Aero 2, Finance 3.
+  const bobAtSoftware = chipIn('Wave 1', 1, 'Software', 'Bob')!
+  expect(bobAtSoftware.className).toContain('has-warning')
+  // Outside edit mode nothing can be dragged.
+  expect(bobAtSoftware.getAttribute('draggable')).toBe('false')
+  drag(bobAtSoftware, cell('Wave 2', 1, 'Software'))
+  expect(chipIn('Wave 1', 1, 'Software', 'Bob')).not.toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Edit schedule' }))
+  drag(chipIn('Wave 1', 1, 'Software', 'Bob')!, cell('Wave 2', 1, 'Software'))
+  expect(chipIn('Wave 2', 1, 'Software', 'Bob')).not.toBeNull()
+  expect(screen.getByText('2 wave placement notes')).toBeInTheDocument()
+  // Bob is already interviewing in Wave 2 round 1, so a second interview there is refused.
+  drag(chipIn('Wave 1', 2, 'Aero', 'Bob')!, cell('Wave 2', 1, 'Aero'))
+  expect(screen.getByText(/Bob is booked twice in Wave 2 round 1/)).toBeInTheDocument()
+  expect(chipIn('Wave 1', 2, 'Aero', 'Bob')).not.toBeNull()
+  drag(chipIn('Wave 1', 2, 'Aero', 'Bob')!, cell('Wave 2', 2, 'Aero'))
+  drag(chipIn('Wave 1', 3, 'Finance', 'Bob')!, cell('Wave 2', 3, 'Finance'))
+  expect(screen.queryByText(/wave placement note/)).not.toBeInTheDocument()
+  // Within a wave, a student can only change employer, since they interview in every round.
+  drag(chipIn('Wave 1', 1, 'Aero', 'Alice')!, cell('Wave 1', 1, 'Software'))
+  expect(chipIn('Wave 1', 1, 'Software', 'Alice')).not.toBeNull()
+  expect(savedWorkspace().students.Alice.interviewResults.map((i) => i.business)).toEqual([
+    'Aero',
+    'Finance',
+    'Software'
+  ])
+  expect(savedWorkspace().scheduleApproved).toBe(false)
 })
+
 it('reports understandable import/export errors and keeps the existing workspace', async () => {
   render(<App />)
   await importData()
@@ -428,15 +640,13 @@ it('keeps keyboard focus inside editors and returns focus to the control on Esca
   render(<App />)
   await importData()
   fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
-  const settingsButton = screen.getByRole('button', {
-    name: 'Edit schedule window and interview length'
-  })
+  const settingsButton = screen.getByRole('button', { name: 'New wave' })
   settingsButton.focus()
   fireEvent.click(settingsButton)
   const dialog = screen.getByRole('dialog')
   const first = within(dialog).getByRole('button', { name: 'Close dialog' })
-  const last = within(dialog).getByRole('button', { name: 'Save schedule settings' })
-  expect(screen.getByLabelText('Schedule start time')).toHaveFocus()
+  const last = within(dialog).getByRole('button', { name: 'Save wave' })
+  expect(screen.getByLabelText('Wave name')).toHaveFocus()
   last.focus()
   fireEvent.keyDown(dialog, { key: 'Tab' })
   expect(first).toHaveFocus()
@@ -908,4 +1118,40 @@ it('reruns without confirmation after all manual overrides are restored to gener
   fireEvent.click(screen.getByRole('button', { name: 'Re-run matching' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(savedWorkspace().placements).toEqual(savedWorkspace().autoPlacements)
+})
+
+it('upgrades a workspace saved with interview times into waves and rounds', () => {
+  const legacy = {
+    ...fixture(),
+    scheduleSettings: { start: '09:00', end: '12:00', durationMinutes: 30 },
+    employers: [
+      {
+        name: 'Aero',
+        industry: 'Aerospace',
+        capacity: 1,
+        active: true,
+        scheduling: { start: '09:00', durationMinutes: 15, parallelInterviews: 2 }
+      }
+    ],
+    schedule: [
+      { id: 'a', student: 'Alice', employer: 'Aero', time: '09:30', round: 1 },
+      { id: 'b', student: 'Bob', employer: 'Aero', time: '09:00', round: 1, durationMinutes: 10 }
+    ]
+  }
+  legacy.students.Bob = Object.assign(new Student(), { name: 'Bob' })
+  localStorage.setItem('jcim-workspace-v1', JSON.stringify(legacy))
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Interview Schedule' }))
+  const cellOf = (student: string) =>
+    document.querySelector(`.student-chip[data-student="${student}"]`)!.closest('td')!.dataset
+  expect(cellOf('Bob')).toMatchObject({ wave: 'Wave 1', round: '1' })
+  expect(cellOf('Alice')).toMatchObject({ wave: 'Wave 1', round: '2' })
+  expect(screen.getByText('2 per round')).toBeInTheDocument()
+  expect(screen.queryByText(/scheduling issue/)).not.toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Interview date'), { target: { value: '2026-10-15' } })
+  expect(savedWorkspace()).toMatchObject({
+    waves: [{ name: 'Wave 1', rounds: 3 }],
+    employers: [{ scheduling: { studentsPerRound: 2 } }]
+  })
+  expect(savedWorkspace()).not.toHaveProperty('scheduleSettings')
 })

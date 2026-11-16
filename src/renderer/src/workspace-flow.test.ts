@@ -7,7 +7,7 @@ import { matchInternships } from './matching'
 
 function fixture() {
   const data = emptyWorkspace()
-  data.employers = ['Active', 'Paused'].map((name) => ({
+  data.employers = ['Active', 'Paused', 'Second', 'Third'].map((name) => ({
     name,
     industry: '',
     capacity: 2,
@@ -27,12 +27,14 @@ function fixture() {
 
 it('excludes inactive employers from both schedule and matching, without mutating their records', () => {
   const data = fixture()
-  expect(generateSchedule(data).map((i) => i.employer)).toEqual(['Active', 'Active'])
+  const scheduled = generateSchedule(data).schedule
+  expect(scheduled).toHaveLength(6)
+  expect(scheduled.map((i) => i.employer)).not.toContain('Paused')
   expect(matchInternships(matchingInput(data)).assignments.map((i) => i.company)).toEqual([
     'Active',
     'Active'
   ])
-  expect(data.employers).toHaveLength(2)
+  expect(data.employers).toHaveLength(4)
   expect(data.students.Alice.interviewResults).toHaveLength(2)
 })
 it('uses the latest round and never reuses earlier approval after an employer decline', () => {
@@ -51,11 +53,13 @@ it('places every student within capacity and detects schedule overlaps', () => {
   const data = fixture()
   data.employers[1].active = true
   data.employers[0].capacity = 1
-  const scheduled = generateSchedule(data)
+  const { schedule: scheduled, waves } = generateSchedule(data)
+  data.waves = waves
   for (const interview of scheduled)
     expect(scheduleConflict(scheduled, interview, data)).toBeUndefined()
-  const changed = { ...scheduled[1], time: '09:15' }
-  expect(scheduleConflict(scheduled, changed, data)).toContain('times do not overlap')
+  // Every student interviews in each round, so moving to another round double-books them.
+  const changed = { ...scheduled[0], round: (scheduled[0].round % 3) + 1 }
+  expect(scheduleConflict(scheduled, changed, data)).toContain('Alice is booked twice')
   const result = matchInternships(matchingInput(data))
   expect(result.assignments.filter((a) => a.company === 'Active')).toHaveLength(1)
   expect(new Set(result.assignments.map((a) => a.student)).size).toBe(result.assignments.length)
