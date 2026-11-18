@@ -1,5 +1,11 @@
 import ExcelJS from 'exceljs'
-import { scheduleIssues, scheduleSettings } from '../shared/scheduling'
+import {
+  convertTimedSchedule,
+  findWave,
+  sameName,
+  scheduleIssues,
+  type TimedInterview
+} from '../shared/scheduling'
 import { rememberIndustries } from '../shared/industries'
 import { latestInterviews } from '../shared/feedback'
 import { Student } from '../shared/student'
@@ -78,6 +84,7 @@ function bool(
 const names = {
   students: 'JCIM Students',
   employers: 'JCIM Employers',
+  waves: 'JCIM Waves',
   feedback: 'JCIM Feedback',
   schedule: 'JCIM Schedule',
   matches: 'JCIM Matches',
@@ -86,6 +93,7 @@ const names = {
 const headers = {
   students: ['Student', 'School', 'Grade', 'Interests'],
   employers: ['Employer', 'Industry', 'Capacity', 'Active'],
+  waves: ['Wave', 'Rounds', 'Schools', 'Students'],
   feedback: [
     'Student',
     'Wave',
@@ -101,31 +109,36 @@ const headers = {
     'Employer positions',
     'Employer notes'
   ],
-  schedule: ['ID', 'Student', 'Employer', 'Time', 'Round'],
+  schedule: ['ID', 'Student', 'Employer'],
   matches: ['Student', 'Employer', 'Student rating'],
   settings: ['Key', 'Value']
 }
 
+// Columns after the required ones are found by heading, so older layouts still import.
 const exportHeaders = {
   ...headers,
-  employers: [
-    ...headers.employers,
-    'Interview start',
-    'Interview end',
-    'Interview minutes',
-    'Students at once',
-    'Roles'
-  ],
-  schedule: [...headers.schedule, 'Interview minutes'],
+  employers: [...headers.employers, 'Students per round', 'Roles'],
+  schedule: [...headers.schedule, 'Wave', 'Round'],
   matches: [...headers.matches, 'Role']
 }
+// Headings written before waves existed. They are read for conversion and never written.
+const legacyHeaders: Partial<Record<keyof typeof names, string[]>> = {
+  employers: ['Interview start', 'Interview end', 'Interview minutes', 'Students at once'],
+  schedule: ['Time', 'Round', 'Interview minutes']
+}
 
-function requiredSheet(workbook: ExcelJS.Workbook, key: keyof typeof names): ExcelJS.Worksheet {
+interface SheetColumns {
+  sheet: ExcelJS.Worksheet
+  // 1-based index of an optional column, when its heading is present.
+  column: (heading: string) => number | undefined
+}
+
+function readSheet(workbook: ExcelJS.Workbook, key: keyof typeof names): SheetColumns {
   const sheet = workbook.getWorksheet(names[key])
   if (!sheet)
     fail(
       `Required tab “${names[key]}” is missing.`,
-      'Import a complete JCIM export. Keep all six JCIM tabs in the workbook.'
+      'Import a complete JCIM export. Keep all JCIM tabs in the workbook.'
     )
   headers[key].forEach((header, i) => {
     if (text(sheet, 1, i + 1) !== header)
@@ -134,19 +147,26 @@ function requiredSheet(workbook: ExcelJS.Workbook, key: keyof typeof names): Exc
         'Restore the original column headings from a JCIM export and try again.'
       )
   })
-  const all = exportHeaders[key]
-  for (let index = headers[key].length; index < all.length; index++) {
-    const heading = text(sheet, 1, index + 1)
+  const known = [...exportHeaders[key], ...(legacyHeaders[key] ?? [])]
+  const columns = new Map<string, number>()
+  const last = Math.max(sheet.columnCount, known.length)
+  for (let index = headers[key].length + 1; index <= last; index++) {
+    const heading = text(sheet, 1, index)
     const hasValues = sheet
-      .getColumn(index + 1)
+      .getColumn(index)
       .values.some((value, row) => row > 1 && value !== null && value !== undefined && value !== '')
-    if ((heading || hasValues) && heading !== all[index])
+    if (!heading && !hasValues) continue
+    if (!known.includes(heading) || columns.has(heading))
       fail(
-        `“${sheet.name}”, cell ${sheet.getCell(1, index + 1).address}, must have the heading “${all[index]}”.`,
-        'Restore the scheduling column headings from a JCIM export.'
+        `“${sheet.name}”, cell ${sheet.getCell(1, index).address}, has the heading “${heading || '(blank)'}”. Expected one of ${known
+          .slice(headers[key].length)
+          .map((h) => `“${h}”`)
+          .join(', ')}.`,
+        'Restore the column headings from a JCIM export.'
       )
+    columns.set(heading, index)
   }
-  return sheet
+  return { sheet, column: (heading) => columns.get(heading) }
 }
 
 function nonemptyRows(sheet: ExcelJS.Worksheet, visit: (row: number) => void) {
@@ -157,7 +177,7 @@ function nonemptyRows(sheet: ExcelJS.Worksheet, visit: (row: number) => void) {
 
 function readNative(workbook: ExcelJS.Workbook): Workspace {
   const data = emptyWorkspace()
-  const students = requiredSheet(workbook, 'students')
+  const { sheet: students } = readSheet(workbook, 'students')
   nonemptyRows(students, (row) => {
     const name = text(students, row, 1)
     if (!name || Object.hasOwn(data.students, name))
@@ -182,7 +202,9 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
       writable: true
     })
   })
-  const employers = requiredSheet(workbook, 'employers')
+  const { sheet: employers, column: employerColumn } = readSheet(workbook, 'employers')
+  const rolesColumn = employerColumn('Roles')
+  const limitColumn = employerColumn('Students per round') ?? employerColumn('Students at once')
   nonemptyRows(employers, (row) => {
     const name = text(employers, row, 1)
     if (!name || data.employers.some((e) => e.name.toLowerCase() === name.toLowerCase()))
@@ -197,10 +219,10 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
         'Set Active to Yes or No.'
       )
     const capacity = number(employers, row, 3, 'capacity', 0)
-    const { roles, error } = parseRoles(text(employers, row, 9))
+    const { roles, error } = parseRoles(rolesColumn ? text(employers, row, rolesColumn) : '')
     if (error)
       fail(
-        `“${employers.name}”, cell ${employers.getCell(row, 9).address}: ${error}`,
+        `“${employers.name}”, cell ${employers.getCell(row, rolesColumn).address}: ${error}`,
         'List roles as “Title: places”, separated by commas, for example “Engineering: 2, HR: 1”. Leave blank for general places.'
       )
     if (roles.length && roles.reduce((sum, r) => sum + r.capacity, 0) !== capacity)
@@ -214,19 +236,45 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
       capacity,
       ...(roles.length ? { roles } : {}),
       active,
-      scheduling: {
-        start: text(employers, row, 5) || undefined,
-        end: text(employers, row, 6) || undefined,
-        durationMinutes: text(employers, row, 7)
-          ? number(employers, row, 7, 'interview minutes', 1, 1440)
-          : undefined,
-        parallelInterviews: text(employers, row, 8)
-          ? number(employers, row, 8, 'students at once', 1)
-          : undefined
-      }
+      ...(limitColumn && text(employers, row, limitColumn)
+        ? {
+            scheduling: {
+              studentsPerRound: number(employers, row, limitColumn, 'students per round', 1)
+            }
+          }
+        : {})
     })
   })
-  const feedback = requiredSheet(workbook, 'feedback')
+  // Exports written before waves existed have no waves tab; their schedule is converted below.
+  const waves = workbook.getWorksheet(names.waves) ? readSheet(workbook, 'waves') : undefined
+  if (waves)
+    nonemptyRows(waves.sheet, (row) => {
+      const name = text(waves.sheet, row, 1)
+      if (!name || data.waves.some((w) => sameName(w.name, name)))
+        fail(
+          `“${waves.sheet.name}”, row ${row}: wave name is blank or duplicated (“${name}”).`,
+          'Give each wave a unique name.'
+        )
+      const list = (column: number) =>
+        text(waves.sheet, row, column)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      const members = list(4)
+      const missing = members.find((student) => !Object.hasOwn(data.students, student))
+      if (missing !== undefined)
+        fail(
+          `“${waves.sheet.name}”, row ${row}: student “${missing}” is missing from “${names.students}”.`,
+          'Add the student to JCIM Students or remove them from the wave.'
+        )
+      data.waves.push({
+        name,
+        rounds: number(waves.sheet, row, 2, 'rounds', 1, 50),
+        schools: list(3),
+        students: members
+      })
+    })
+  const { sheet: feedback } = readSheet(workbook, 'feedback')
   nonemptyRows(feedback, (row) => {
     const student = text(feedback, row, 1)
     const employer = text(feedback, row, 3)
@@ -253,40 +301,52 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
     result.employerNotes = text(feedback, row, 13)
     data.students[student].interviewResults.push(result)
   })
-  const schedule = requiredSheet(workbook, 'schedule')
+  const { sheet: schedule, column: scheduleColumn } = readSheet(workbook, 'schedule')
+  const timeColumn = scheduleColumn('Time')
+  const waveColumn = scheduleColumn('Wave')
+  const roundColumn = scheduleColumn('Round')
+  if (!roundColumn || (!timeColumn && !waveColumn))
+    fail(
+      `“${schedule.name}” must have Wave and Round columns.`,
+      'Restore the Wave and Round headings from a JCIM export.'
+    )
+  const timed: TimedInterview[] = []
   nonemptyRows(schedule, (row) => {
     const student = text(schedule, row, 2)
     const employer = text(schedule, row, 3)
     checkReferences(data, schedule.name, row, student, employer)
-    const time = text(schedule, row, 4)
     const id = text(schedule, row, 1)
-    if (!id || data.schedule.some((i) => i.id === id))
+    if (!id || [...data.schedule, ...timed].some((i) => i.id === id))
       fail(
         `“${schedule.name}”, row ${row}: interview ID is blank or duplicated.`,
         'Give each scheduled interview a unique ID.'
-      )
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
-      fail(
-        `“${schedule.name}”, row ${row}: time “${time}” is invalid.`,
-        'Enter the start time as HH:MM, for example 09:30.'
       )
     if (!data.employers.find((e) => e.name === employer)?.active)
       fail(
         `“${schedule.name}”, row ${row}, schedules inactive employer “${employer}”.`,
         'Remove that schedule row or turn the employer on. Keep the employer and feedback rows.'
       )
-    data.schedule.push({
-      id,
-      student,
-      employer,
-      time,
-      round: number(schedule, row, 5, 'round', 1),
-      durationMinutes: text(schedule, row, 6)
-        ? number(schedule, row, 6, 'interview minutes', 1, 1440)
-        : undefined
-    })
+    const round = number(schedule, row, roundColumn, 'round', 1)
+    if (timeColumn) {
+      const time = text(schedule, row, timeColumn)
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
+        fail(
+          `“${schedule.name}”, row ${row}: time “${time}” is invalid.`,
+          'Enter the start time as HH:MM, for example 09:30.'
+        )
+      timed.push({ id, student, employer, time, round })
+      return
+    }
+    const wave = text(schedule, row, waveColumn!)
+    if (!findWave(data, wave))
+      fail(
+        `“${schedule.name}”, row ${row}: wave “${wave || '(blank)'}” is missing from “${names.waves}”.`,
+        'Add the wave to JCIM Waves or correct the wave name in this row.'
+      )
+    data.schedule.push({ id, student, employer, wave, round })
   })
-  const matches = requiredSheet(workbook, 'matches')
+  if (timed.length) Object.assign(data, convertTimedSchedule(timed, data.waves))
+  const { sheet: matches } = readSheet(workbook, 'matches')
   nonemptyRows(matches, (row) => {
     const student = text(matches, row, 1)
     const company = text(matches, row, 2)
@@ -315,13 +375,13 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
       )
     data.placements.push({ student, company, role: role.title, rating })
   })
-  const settings = requiredSheet(workbook, 'settings')
+  const { sheet: settings } = readSheet(workbook, 'settings')
   const values = new Map<string, string>()
   nonemptyRows(settings, (row) => values.set(text(settings, row, 1), text(settings, row, 2)))
-  if (values.get('Format version') !== '1')
+  if (!['1', '2'].includes(values.get('Format version') ?? ''))
     fail(
       '“JCIM Settings”: unsupported or missing Format version.',
-      'Use a complete export from this version of JCIM. Keep Format version set to 1.'
+      'Use a complete export from this version of JCIM. Keep Format version set to 2.'
     )
   const savedBank = values.get('Industry bank')
   if (savedBank) {
@@ -344,17 +404,6 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
       )
     data.industries = bank as string[]
   }
-  const hasScheduleSettings = ['Schedule start', 'Schedule end', 'Default interview minutes'].some(
-    (key) => values.has(key)
-  )
-  if (hasScheduleSettings) {
-    const duration = Number(values.get('Default interview minutes'))
-    data.scheduleSettings = {
-      start: values.get('Schedule start') ?? '',
-      end: values.get('Schedule end') ?? '',
-      durationMinutes: duration
-    }
-  } else data.scheduleSettings = scheduleSettings(data)
   data.interviewDate = values.get('Interview date') ?? ''
   if (
     data.interviewDate &&
@@ -387,21 +436,28 @@ function readNative(workbook: ExcelJS.Workbook): Workspace {
     )
   const issue = scheduleIssues(data)[0]
   if (issue) {
-    let row: number | undefined
-    if (issue.id)
-      nonemptyRows(schedule, (index) => {
-        if (text(schedule, index, 1) === issue.id) row = index
-      })
-    if (issue.employer)
-      nonemptyRows(employers, (index) => {
-        if (text(employers, index, 1) === issue.employer) row = index
-      })
+    const located = issue.id
+      ? rowLocation(schedule, issue.id)
+      : issue.employer
+        ? rowLocation(employers, issue.employer)
+        : issue.wave && waves
+          ? rowLocation(waves.sheet, issue.wave)
+          : `“${settings.name}”`
     fail(
-      `“${issue.id ? schedule.name : issue.employer ? employers.name : settings.name}”${row ? `, row ${row}` : ''}: ${issue.detail}`,
-      'Correct the interview times, duration, employer interview limits, or schedule hours, then import again. Student interviews must not overlap.'
+      `${located}: ${issue.detail}`,
+      'Correct the wave, round, or employer limit, then import again. A student cannot interview twice in the same round.'
     )
   }
   return rememberIndustries(data)
+}
+
+// The sheet and row whose first cell holds `value`, for an error message.
+function rowLocation(sheet: ExcelJS.Worksheet, value: string): string {
+  let row: number | undefined
+  nonemptyRows(sheet, (index) => {
+    if (text(sheet, index, 1) === value) row = index
+  })
+  return `“${sheet.name}”${row ? `, row ${row}` : ''}`
 }
 
 function checkReferences(
@@ -625,12 +681,68 @@ export function readWorkbook(workbook: ExcelJS.Workbook): {
 
 const answer = (value: boolean | undefined) => (value === undefined ? '' : value ? 'Yes' : 'No')
 
-export function writeWorkspace(workbook: ExcelJS.Workbook, data: Workspace): ExcelJS.Workbook {
+const readMeName = 'Read me'
+
+function addReadMe(workbook: ExcelJS.Workbook, data: Workspace) {
+  const sheet = workbook.addWorksheet(readMeName)
+  sheet.getColumn(1).width = 24
+  sheet.getColumn(2).width = 110
+  sheet.getColumn(2).alignment = { wrapText: true, vertical: 'top' }
+  const when = (iso: string) => new Date(iso).toLocaleString()
+  sheet.addRows([
+    ['JCIM export', `Saved ${when(new Date().toISOString())}`],
+    [
+      'Imported from',
+      data.sourceName
+        ? `${data.sourceName}${data.importedAt ? ` on ${when(data.importedAt)}` : ''}`
+        : 'No workbook was imported.'
+    ],
+    [],
+    [
+      'Re-importing',
+      'Use Import workbook in JCIM to load this file again. Only the tabs whose names start with “JCIM” are read.'
+    ],
+    [
+      'Editing in Excel',
+      'Keep every JCIM tab and its heading row (row 1) exactly as exported. Rows below the headings can be edited.'
+    ],
+    [
+      'Yes/No columns',
+      'Use Yes, No, Maybe, or leave the cell blank. Active on JCIM Employers must be Yes or No.'
+    ],
+    [
+      'Times and dates',
+      'Times are 24-hour HH:MM, such as 09:30. The interview date is YYYY-MM-DD.'
+    ],
+    [],
+    [names.students, 'One row per student: school, grade, and comma-separated interests.'],
+    [
+      names.employers,
+      'One row per employer: industry, capacity, Active, students per round, and roles.'
+    ],
+    [
+      names.waves,
+      'One row per wave: its name, number of rounds, and the comma-separated schools and students placed in it.'
+    ],
+    [
+      names.feedback,
+      'One row per interview: the student’s answers and rating, and the employer’s response.'
+    ],
+    [names.schedule, 'One row per scheduled interview: student, employer, wave, and round.'],
+    [names.matches, 'Final placements with the student rating and role.'],
+    [names.settings, 'Interview date, approvals, and the industry bank.']
+  ])
+  sheet.getColumn(1).font = { bold: true }
+  sheet.getCell('A1').font = { bold: true, size: 14 }
+}
+
+export function writeWorkspace(data: Workspace): ExcelJS.Workbook {
   data = rememberIndustries(data)
-  // Only the app-owned tabs are replaced. Original tracker worksheets stay intact.
+  // Built from scratch: copying the imported tracker's own tabs through ExcelJS produced
+  // workbooks that Excel had to repair, and import never reads those tabs anyway.
+  const workbook = new ExcelJS.Workbook()
+  addReadMe(workbook, data)
   for (const [key, name] of Object.entries(names)) {
-    const existing = workbook.getWorksheet(name)
-    if (existing) workbook.removeWorksheet(existing.id)
     const sheet = workbook.addWorksheet(name)
     sheet.addRow(exportHeaders[key as keyof typeof headers])
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
@@ -680,28 +792,24 @@ export function writeWorkspace(workbook: ExcelJS.Workbook, data: Workspace): Exc
         e.industry,
         e.capacity,
         answer(e.active),
-        e.scheduling?.start ?? '',
-        e.scheduling?.end ?? '',
-        e.scheduling?.durationMinutes ?? '',
-        e.scheduling?.parallelInterviews ?? '',
+        e.scheduling?.studentsPerRound ?? '',
         formatRoles(e.roles)
       ])
-  for (const i of data.schedule)
+  for (const w of data.waves)
     workbook
-      .getWorksheet(names.schedule)!
-      .addRow([i.id, i.student, i.employer, i.time, i.round, i.durationMinutes ?? ''])
+      .getWorksheet(names.waves)!
+      .addRow([w.name, w.rounds, w.schools.join(', '), w.students.join(', ')])
+  for (const i of data.schedule)
+    workbook.getWorksheet(names.schedule)!.addRow([i.id, i.student, i.employer, i.wave, i.round])
   for (const p of data.placements)
     workbook.getWorksheet(names.matches)!.addRow([p.student, p.company, p.rating, p.role ?? ''])
   const settings = workbook.getWorksheet(names.settings)!
   settings.addRows([
-    ['Format version', '1'],
+    ['Format version', '2'],
     ['Interview date', data.interviewDate],
     ['Schedule approved', answer(data.scheduleApproved)],
     ['Matching approved', answer(data.matchingApproved)],
-    ['Industry bank', JSON.stringify(data.industries)],
-    ['Schedule start', scheduleSettings(data).start],
-    ['Schedule end', scheduleSettings(data).end],
-    ['Default interview minutes', scheduleSettings(data).durationMinutes]
+    ['Industry bank', JSON.stringify(data.industries)]
   ])
   // Validate exported data using the same strict rules as a later import.
   readNative(workbook)
@@ -724,7 +832,7 @@ export function fileError(error: unknown, action: 'import' | 'export', path: str
   if (/ENOENT/i.test(reason))
     fix =
       action === 'export'
-        ? 'The saved source workbook or destination folder is missing. Re-import the source workbook if its saved copy is unavailable, then choose an existing destination folder.'
+        ? 'The destination folder is missing. Choose an existing folder, such as Documents.'
         : 'The selected file was moved or deleted. Choose an existing .xlsx file.'
   if (/ENOSPC/i.test(reason))
     fix = `Free some disk space or choose another drive, then ${action} again.`

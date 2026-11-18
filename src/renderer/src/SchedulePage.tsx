@@ -1,24 +1,15 @@
-import { useState, type FormEvent, type CSSProperties } from 'react'
-import type {
-  Employer,
-  EmployerScheduling,
-  ScheduledInterview,
-  ScheduleSettings,
-  Workspace
-} from '../../shared/workspace'
-import type { Student } from '../../shared/student'
-import { InterviewResult } from '../../shared/interviewResult'
+import { useState, type DragEvent, type FormEvent } from 'react'
+import type { Employer, ScheduledInterview, Wave, Workspace } from '../../shared/workspace'
 import {
-  clockTime,
-  employerSchedule,
+  defaultRounds,
   employerSettingsError,
-  interviewDuration,
-  minutes,
+  sameName,
   scheduleConflict,
   scheduleIssues,
-  scheduleSettings,
-  settingsError,
-  timeLabel
+  scheduleWarnings,
+  studentsPerRound,
+  waveError,
+  withFeedbackRows
 } from '../../shared/scheduling'
 import Modal from './Modal'
 
@@ -33,17 +24,34 @@ function field(form: FormData, name: string) {
   const value = form.get(name)
   return typeof value === 'string' ? value.trim() : ''
 }
-function optionalNumber(form: FormData, name: string) {
-  const value = field(form, name)
-  return value ? Number(value) : undefined
+function chosen(form: FormData, name: string): string[] {
+  return form.getAll(name).filter((value): value is string => typeof value === 'string')
 }
-// Time inputs cannot show placeholders, so inherited times are prefilled and only differences are saved.
-function overrideTime(form: FormData, name: string, inherited: string) {
-  const value = field(form, name)
-  return value && value !== inherited ? value : undefined
-}
+const count = (value: number, word: string) => `${value} ${word}${value === 1 ? '' : 's'}`
 
-type InterviewDraft = { interview?: ScheduledInterview; employer?: string; time?: string }
+// Light fills that keep dark text readable. Schools take them in alphabetical order.
+const schoolFills = [
+  '#f3dfb8',
+  '#dcd3ef',
+  '#dbe9cf',
+  '#cfe0f3',
+  '#f6d2cf',
+  '#fbe9b4',
+  '#cde9e3',
+  '#f0d4ec',
+  '#d9dde3',
+  '#e6f0c2',
+  '#f9dcc4',
+  '#d7e4f7'
+]
+
+type InterviewDraft = {
+  interview?: ScheduledInterview
+  employer?: string
+  wave?: string
+  round?: number
+}
+type Cell = { wave: string; round: number; employer: string }
 
 export default function SchedulePage({
   data,
@@ -56,20 +64,25 @@ export default function SchedulePage({
   editSchedule: boolean
   onGenerate: () => void
 }) {
-  const [settingsEditor, setSettingsEditor] = useState<'overall' | Employer | null>(null)
+  const [waveEditor, setWaveEditor] = useState<Wave | 'new' | null>(null)
+  const [waveToRemove, setWaveToRemove] = useState<Wave | null>(null)
+  const [employerEditor, setEmployerEditor] = useState<Employer | null>(null)
   const [interviewEditor, setInterviewEditor] = useState<InterviewDraft | null>(null)
   const [error, setError] = useState('')
-  const global = scheduleSettings(data)
+  const [dropError, setDropError] = useState('')
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [dragOver, setDragOver] = useState<string | null>(null)
   const employers = data.employers.filter((e) => e.active)
   const students = Object.values(data.students)
-  const draftEmployer =
-    employers.find(
-      (e) => e.name === (interviewEditor?.employer ?? interviewEditor?.interview?.employer)
-    ) ?? employers[0]
-  const draftDuration = draftEmployer
-    ? employerSchedule(data, draftEmployer).durationMinutes
-    : global.durationMinutes
   const issues = scheduleIssues(data)
+  const warnings = scheduleWarnings(data)
+  const schools = [
+    ...new Set(students.map((s) => s.school?.trim()).filter((s): s is string => !!s))
+  ].sort((a, b) => a.localeCompare(b))
+  const schoolFill = (school: string | undefined) => {
+    const index = school ? schools.findIndex((s) => sameName(s, school)) : -1
+    return index === -1 ? undefined : schoolFills[index % schoolFills.length]
+  }
   const dateLabel = data.interviewDate
     ? new Date(`${data.interviewDate}T12:00:00`).toLocaleDateString(undefined, {
         weekday: 'long',
@@ -78,154 +91,131 @@ export default function SchedulePage({
         year: 'numeric'
       })
     : 'No interview date set'
-  const minuteMarks = new Set<number>([minutes(global.start), minutes(global.end)])
-  for (
-    let time = minutes(global.start);
-    time < minutes(global.end);
-    time += Math.max(1, global.durationMinutes)
-  )
-    minuteMarks.add(time)
-  for (const employer of employers) {
-    const config = employerSchedule(data, employer)
-    minuteMarks.add(minutes(config.start))
-    minuteMarks.add(minutes(config.end))
-  }
-  for (const i of data.schedule) {
-    minuteMarks.add(minutes(i.time))
-    minuteMarks.add(minutes(i.time) + interviewDuration(data, i))
-  }
-  const marks = [...minuteMarks].filter(Number.isFinite).sort((a, b) => a - b)
-  const smallestDuration = Math.min(
-    global.durationMinutes,
-    ...data.schedule.map((i) => interviewDuration(data, i))
-  )
-  const pixelsPerMinute = Math.max(1.5, Math.min(8, 80 / Math.max(1, smallestDuration)))
-  const layout = employers.map((employer) => {
-    const ends: number[] = []
-    const interviews = data.schedule
-      .filter((i) => i.employer === employer.name)
-      .sort((a, b) => minutes(a.time) - minutes(b.time))
-    const positioned = interviews.map((interview) => {
-      let lane = ends.findIndex((end) => end <= minutes(interview.time))
-      if (lane === -1) lane = ends.length
-      ends[lane] = minutes(interview.time) + interviewDuration(data, interview)
-      return { interview, lane }
+  const cellKey = (cell: Cell) => JSON.stringify([cell.wave, cell.round, cell.employer])
+  const interviewsIn = (cell: Cell) =>
+    data.schedule.filter(
+      (i) => i.wave === cell.wave && i.round === cell.round && i.employer === cell.employer
+    )
+
+  function placeInterview(interview: ScheduledInterview, replacing: boolean): string | undefined {
+    const conflict = scheduleConflict(data.schedule, interview, data)
+    if (conflict) return conflict
+    onChange({
+      ...data,
+      students: withFeedbackRows(data, [interview], data.waves),
+      schedule: replacing
+        ? data.schedule.map((i) => (i.id === interview.id ? interview : i))
+        : [...data.schedule, interview],
+      scheduleApproved: false
     })
-    return { employer, positioned, lanes: Math.max(1, ends.length) }
-  })
-  const gridStyle: CSSProperties = {
-    minWidth: 76 + layout.reduce((total, item) => total + Math.max(180, item.lanes * 150), 0),
-    gridTemplateColumns: `76px ${layout.map((item) => `minmax(${Math.max(180, item.lanes * 150)}px, 1fr)`).join(' ')}`,
-    gridTemplateRows: `auto ${marks
-      .slice(0, -1)
-      .map((time, index) => `${Math.max(20, (marks[index + 1] - time) * pixelsPerMinute)}px`)
-      .join(' ')} 20px`
-  }
-  function openSettings(value: 'overall' | Employer) {
-    setSettingsEditor(value)
-    setError('')
-  }
-  function openInterview(value: InterviewDraft) {
-    setInterviewEditor(value)
-    setError('')
-  }
-  function saveSettings(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!settingsEditor) return
-    const form = new FormData(event.currentTarget)
-    if (settingsEditor === 'overall') {
-      const settings: ScheduleSettings = {
-        start: field(form, 'start'),
-        end: field(form, 'end'),
-        durationMinutes: Number(field(form, 'duration'))
-      }
-      const invalid = settingsError(settings)
-      if (invalid) {
-        setError(invalid)
-        return
-      }
-      onChange({ ...data, scheduleSettings: settings, scheduleApproved: false })
-    } else {
-      const scheduling: EmployerScheduling = {
-        start: overrideTime(form, 'start', global.start),
-        end: overrideTime(form, 'end', global.end),
-        durationMinutes: optionalNumber(form, 'duration'),
-        parallelInterviews: optionalNumber(form, 'parallel')
-      }
-      const employer = { ...settingsEditor, scheduling }
-      const invalid = employerSettingsError(data, employer)
-      if (invalid) {
-        setError(invalid)
-        return
-      }
-      onChange({
-        ...data,
-        employers: data.employers.map((e) => (e.name === employer.name ? employer : e)),
-        scheduleApproved: false
-      })
-    }
-    setSettingsEditor(null)
   }
   function saveInterview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!interviewEditor) return
     const form = new FormData(event.currentTarget)
-    const student = field(form, 'student'),
-      employer = field(form, 'employer')
-    const round = Number(field(form, 'round'))
-    if (!Number.isSafeInteger(round) || round < 1) {
-      setError('Round must be a whole number of 1 or more.')
-      return
-    }
-    const durationValue = field(form, 'duration')
     const interview: ScheduledInterview = {
       id: interviewEditor.interview?.id ?? crypto.randomUUID(),
-      student,
-      employer,
-      time: field(form, 'time'),
-      round,
-      durationMinutes: durationValue ? Number(durationValue) : undefined
+      student: field(form, 'student'),
+      employer: field(form, 'employer'),
+      wave: field(form, 'wave'),
+      round: Number(field(form, 'round'))
     }
-    if (
-      data.schedule.some(
-        (i) =>
-          i.id !== interview.id &&
-          i.student === student &&
-          i.employer === employer &&
-          i.round === round
-      )
-    ) {
-      setError(
-        `${student} already has round ${round} with ${employer}. Edit that interview, or choose a different round.`
-      )
-      return
-    }
-    const invalid = scheduleConflict(data.schedule, interview, data)
+    const invalid = placeInterview(interview, !!interviewEditor.interview)
     if (invalid) {
       setError(invalid)
       return
     }
-    const original = data.students[student]
-    const updated = original.interviewResults.some((i) => i.business === employer)
-      ? original
-      : ({
-          ...original,
-          interviewResults: [
-            ...original.interviewResults,
-            new InterviewResult(student, String(round), employer, '', '', '', '', '0')
-          ]
-        } as Student)
-    onChange({
-      ...data,
-      students: { ...data.students, [student]: updated },
-      schedule: interviewEditor.interview
-        ? data.schedule.map((i) => (i.id === interview.id ? interview : i))
-        : [...data.schedule, interview],
-      scheduleApproved: false
-    })
     setInterviewEditor(null)
   }
-  const editorEmployer = settingsEditor && settingsEditor !== 'overall' ? settingsEditor : null
+  function dropOn(cell: Cell, event: DragEvent<HTMLTableCellElement>) {
+    event.preventDefault()
+    const id = event.dataTransfer?.getData('text/plain') || dragging
+    setDragging(null)
+    setDragOver(null)
+    const interview = id ? data.schedule.find((i) => i.id === id) : undefined
+    if (!interview || !editSchedule) return
+    if (
+      interview.wave === cell.wave &&
+      interview.round === cell.round &&
+      interview.employer === cell.employer
+    )
+      return
+    setDropError(placeInterview({ ...interview, ...cell }, true) ?? '')
+  }
+  function saveWave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!waveEditor) return
+    const form = new FormData(event.currentTarget)
+    const wave: Wave = {
+      name: field(form, 'name').replace(/\s+/g, ' '),
+      rounds: Number(field(form, 'rounds')),
+      schools: chosen(form, 'schools'),
+      students: chosen(form, 'students')
+    }
+    const invalid = waveError(wave)
+    if (invalid) {
+      setError(invalid)
+      return
+    }
+    const previous = waveEditor === 'new' ? undefined : waveEditor.name
+    if (data.waves.some((w) => w.name !== previous && sameName(w.name, wave.name))) {
+      setError(`A wave named “${wave.name}” already exists.`)
+      return
+    }
+    // A school or student belongs to one wave, so the latest placement wins.
+    const strip = (other: Wave): Wave => ({
+      ...other,
+      schools: other.schools.filter((s) => !wave.schools.some((picked) => sameName(picked, s))),
+      students: other.students.filter((s) => !wave.students.includes(s))
+    })
+    onChange({
+      ...data,
+      waves:
+        waveEditor === 'new'
+          ? [...data.waves.map(strip), wave]
+          : data.waves.map((w) => (w.name === previous ? wave : strip(w))),
+      schedule:
+        previous && previous !== wave.name
+          ? data.schedule.map((i) => (i.wave === previous ? { ...i, wave: wave.name } : i))
+          : data.schedule,
+      scheduleApproved: false
+    })
+    setWaveEditor(null)
+  }
+  function removeWave(wave: Wave) {
+    onChange({
+      ...data,
+      waves: data.waves.filter((w) => w.name !== wave.name),
+      schedule: data.schedule.filter((i) => i.wave !== wave.name),
+      scheduleApproved: false
+    })
+    setWaveToRemove(null)
+    setWaveEditor(null)
+  }
+  function saveEmployer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!employerEditor) return
+    const form = new FormData(event.currentTarget)
+    const employer: Employer = {
+      ...employerEditor,
+      scheduling: { studentsPerRound: Number(field(form, 'limit')) }
+    }
+    const invalid = employerSettingsError(employer)
+    if (invalid) {
+      setError(invalid)
+      return
+    }
+    onChange({
+      ...data,
+      employers: data.employers.map((e) => (e.name === employer.name ? employer : e)),
+      scheduleApproved: false
+    })
+    setEmployerEditor(null)
+  }
+  function open<T>(setter: (value: T) => void, value: T) {
+    setter(value)
+    setError('')
+  }
   return (
     <>
       <div className="schedule-summary">
@@ -238,24 +228,12 @@ export default function SchedulePage({
             <span>Active employers</span>
             <strong>{employers.length}</strong>
           </div>
+          <div className="stat">
+            <span>Waves</span>
+            <strong>{data.waves.length}</strong>
+          </div>
         </div>
-        <button
-          className="schedule-settings-button"
-          onClick={() => openSettings('overall')}
-          aria-label="Edit schedule window and interview length"
-        >
-          <div>
-            <span>Schedule window</span>
-            <strong>
-              {timeLabel(global.start)} – {timeLabel(global.end)}
-            </strong>
-          </div>
-          <div>
-            <span>Default interview length</span>
-            <strong>{global.durationMinutes} minutes</strong>
-          </div>
-          <EditIcon />
-        </button>
+        <button onClick={() => open(setWaveEditor, 'new')}>New wave</button>
       </div>
       <div className="section-toolbar">
         <label className="date-field">
@@ -271,8 +249,8 @@ export default function SchedulePage({
         </label>
         {editSchedule && (
           <button
-            onClick={() => openInterview({})}
-            disabled={!students.length || !employers.length}
+            onClick={() => open(setInterviewEditor, {})}
+            disabled={!students.length || !employers.length || !data.waves.length}
           >
             Add interview
           </button>
@@ -281,16 +259,33 @@ export default function SchedulePage({
       {!!issues.length && (
         <section className="notice error schedule-issues" role="alert">
           <div>
-            <strong>
-              {issues.length} scheduling issue{issues.length === 1 ? '' : 's'}
-            </strong>
+            <strong>{count(issues.length, 'scheduling issue')}</strong>
             <ul>
               {issues.map((issue, index) => (
-                <li key={`${issue.id ?? 'settings'}-${index}`}>{issue.detail}</li>
+                <li key={`${issue.id ?? issue.employer ?? issue.wave ?? 'settings'}-${index}`}>
+                  {issue.detail}
+                </li>
               ))}
             </ul>
           </div>
         </section>
+      )}
+      {!!warnings.length && (
+        <section className="notice warning schedule-issues" role="status">
+          <div>
+            <strong>{count(warnings.length, 'wave placement note')}</strong>
+            <ul>
+              {warnings.map((warning) => (
+                <li key={warning.id}>{warning.detail}</li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
+      {dropError && (
+        <p className="form-error" role="alert">
+          {dropError}
+        </p>
       )}
       <section className="board schedule-board">
         <div className="board-heading">
@@ -304,120 +299,164 @@ export default function SchedulePage({
             <h2>No active employers</h2>
             <p>Import a workbook or activate employers on the Employers page.</p>
           </div>
+        ) : !data.waves.length ? (
+          <div className="empty">
+            <h2>No waves yet</h2>
+            <p>
+              Generate schedule gives every student three interviews in Wave 1. Add a wave first to
+              choose which schools and students belong to it.
+            </p>
+          </div>
         ) : (
-          <div className="timetable-scroll" tabIndex={0} aria-label="Interview timetable">
-            <div className="schedule-grid" style={gridStyle}>
-              <div className="time-corner" style={{ gridRow: 1, gridColumn: 1 }} />
-              {layout.map(({ employer }, col) => {
-                const config = employerSchedule(data, employer)
-                return (
-                  <div
-                    className="timetable-employer"
-                    key={employer.name}
-                    style={{ gridRow: 1, gridColumn: col + 2 }}
-                  >
-                    <div className="timetable-employer-name">
-                      <h2>{employer.name}</h2>
-                      <button
-                        className="icon-button"
-                        aria-label={`Edit interview settings for ${employer.name}`}
-                        onClick={() => openSettings(employer)}
-                      >
-                        <EditIcon />
-                      </button>
-                    </div>
-                    <p>
-                      {timeLabel(config.start)} – {timeLabel(config.end)}
-                    </p>
-                    <p className="timetable-employer-settings">
-                      {config.durationMinutes} min · {config.parallelInterviews} student
-                      {config.parallelInterviews === 1 ? '' : 's'} at once
-                    </p>
-                  </div>
-                )
-              })}
-              {marks.map((time, row) => (
-                <div className="time-label" key={time} style={{ gridRow: row + 2, gridColumn: 1 }}>
-                  {timeLabel(clockTime(time))}
-                </div>
-              ))}
-              {marks.slice(0, -1).flatMap((time, row) =>
-                layout.map(({ employer }, col) => {
-                  const config = employerSchedule(data, employer)
-                  const available =
-                    time >= minutes(config.start) && marks[row + 1] <= minutes(config.end)
-                  return (
-                    <div
-                      key={`${time}-${employer.name}`}
-                      className={`timetable-slot ${available ? '' : 'unavailable'}`}
-                      style={{ gridRow: row + 2, gridColumn: col + 2 }}
-                      data-time={clockTime(time)}
-                      data-employer={employer.name}
-                    >
-                      {editSchedule && available && (
-                        <button
-                          className="slot-add"
-                          aria-label={`Add interview at ${timeLabel(clockTime(time))} with ${employer.name}`}
-                          onClick={() =>
-                            openInterview({ employer: employer.name, time: clockTime(time) })
-                          }
-                        >
-                          +
-                        </button>
-                      )}
-                    </div>
-                  )
-                })
-              )}
-              {layout.flatMap(({ employer, positioned, lanes }, col) =>
-                positioned.map(({ interview, lane }) => {
-                  const duration = interviewDuration(data, interview)
-                  const end = minutes(interview.time) + duration
-                  const invalid = issues.some((i) => i.id === interview.id)
-                  return (
-                    <article
-                      className={`timetable-interview ${invalid ? 'has-conflict' : ''}`}
-                      key={interview.id}
-                      data-interview-id={interview.id}
-                      data-start={interview.time}
-                      data-employer={employer.name}
-                      style={{
-                        gridColumn: col + 2,
-                        gridRow: `${marks.indexOf(minutes(interview.time)) + 2} / ${marks.indexOf(end) + 2}`,
-                        marginLeft: `calc(${(lane * 100) / lanes}% + 7px)`,
-                        marginRight: `calc(${((lanes - lane - 1) * 100) / lanes}% + 7px)`
-                      }}
-                    >
-                      <div className="timetable-interview-heading">
-                        <h3>{interview.student}</h3>
-                        {editSchedule && (
+          <>
+            {!!schools.length && (
+              <ul className="school-legend" aria-label="School colors">
+                {schools.map((school) => (
+                  <li key={school}>
+                    <span className="school-swatch" style={{ background: schoolFill(school) }} />
+                    {school}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="wave-scroll" tabIndex={0} aria-label="Interview schedule">
+              <table className="wave-grid">
+                <thead>
+                  <tr>
+                    <th scope="col" className="round-heading">
+                      Round
+                    </th>
+                    {employers.map((employer) => (
+                      <th scope="col" key={employer.name} className="wave-employer">
+                        <div className="wave-employer-name">
+                          <h2>{employer.name}</h2>
                           <button
                             className="icon-button"
-                            aria-label={`Edit interview for ${interview.student} at ${employer.name}, round ${interview.round}`}
-                            onClick={() => openInterview({ interview })}
+                            aria-label={`Edit interview settings for ${employer.name}`}
+                            onClick={() => open(setEmployerEditor, employer)}
                           >
                             <EditIcon />
                           </button>
+                        </div>
+                        {!!employer.roles?.length && (
+                          <p>{employer.roles.map((r) => r.title).join(', ')}</p>
                         )}
-                      </div>
-                      <div className="timetable-interview-footer">
-                        <span>
-                          {timeLabel(interview.time)} – {timeLabel(clockTime(end))}
-                        </span>
-                        <span>Round {interview.round}</span>
-                        {interview.durationMinutes !== undefined && (
-                          <span>{duration} min · override</span>
-                        )}
-                      </div>
-                      {invalid && (
-                        <span className="interview-conflict-label">Scheduling conflict</span>
-                      )}
-                    </article>
-                  )
-                })
-              )}
+                        <p className="wave-employer-settings">
+                          {studentsPerRound(employer)} per round
+                        </p>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                {data.waves.map((wave) => (
+                  <tbody key={wave.name} data-wave={wave.name}>
+                    <tr className="wave-row">
+                      <th scope="rowgroup" colSpan={employers.length + 1}>
+                        <div className="wave-heading">
+                          <strong>{wave.name}</strong>
+                          <span>
+                            {count(wave.rounds, 'round')} ·{' '}
+                            {wave.schools.length
+                              ? `Schools: ${wave.schools.join(', ')}`
+                              : 'No schools placed'}
+                            {wave.students.length ? ` · Students: ${wave.students.join(', ')}` : ''}
+                          </span>
+                          <button
+                            className="icon-button"
+                            aria-label={`Edit ${wave.name}`}
+                            onClick={() => open(setWaveEditor, wave)}
+                          >
+                            <EditIcon />
+                          </button>
+                        </div>
+                      </th>
+                    </tr>
+                    {Array.from({ length: wave.rounds }, (_, index) => index + 1).map((round) => (
+                      <tr key={round} className="round-row">
+                        <th scope="row" className="round-label">
+                          Round {round}
+                        </th>
+                        {employers.map((employer) => {
+                          const cell = { wave: wave.name, round, employer: employer.name }
+                          const key = cellKey(cell)
+                          return (
+                            <td
+                              key={employer.name}
+                              className={`schedule-cell ${dragOver === key ? 'drag-over' : ''}`}
+                              data-wave={wave.name}
+                              data-round={round}
+                              data-employer={employer.name}
+                              onDragOver={(e) => {
+                                if (!editSchedule) return
+                                e.preventDefault()
+                                if (dragOver !== key) setDragOver(key)
+                              }}
+                              onDragLeave={() => {
+                                if (dragOver === key) setDragOver(null)
+                              }}
+                              onDrop={(e) => dropOn(cell, e)}
+                            >
+                              {interviewsIn(cell).map((interview) => {
+                                const conflict = issues.find((i) => i.id === interview.id)?.detail
+                                const warning = warnings.find((w) => w.id === interview.id)?.detail
+                                const school = data.students[interview.student]?.school
+                                return (
+                                  <div
+                                    key={interview.id}
+                                    className={`student-chip ${conflict ? 'has-conflict' : warning ? 'has-warning' : ''}`}
+                                    data-interview-id={interview.id}
+                                    data-student={interview.student}
+                                    style={{ background: schoolFill(school) }}
+                                    title={conflict ?? warning ?? school}
+                                    draggable={editSchedule}
+                                    onDragStart={(e) => {
+                                      e.dataTransfer?.setData('text/plain', interview.id)
+                                      setDragging(interview.id)
+                                      setDropError('')
+                                    }}
+                                    onDragEnd={() => {
+                                      setDragging(null)
+                                      setDragOver(null)
+                                    }}
+                                  >
+                                    <span>{interview.student}</span>
+                                    {editSchedule && (
+                                      <button
+                                        className="icon-button"
+                                        aria-label={`Edit interview for ${interview.student} at ${employer.name}, ${wave.name} round ${round}`}
+                                        onClick={() => open(setInterviewEditor, { interview })}
+                                      >
+                                        <EditIcon />
+                                      </button>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                              {editSchedule && (
+                                <button
+                                  className="slot-add"
+                                  aria-label={`Add interview with ${employer.name} in ${wave.name} round ${round}`}
+                                  onClick={() =>
+                                    open(setInterviewEditor, {
+                                      employer: employer.name,
+                                      wave: wave.name,
+                                      round
+                                    })
+                                  }
+                                >
+                                  +
+                                </button>
+                              )}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                ))}
+              </table>
             </div>
-          </div>
+          </>
         )}
         {!data.schedule.length && !!employers.length && (
           <div className="schedule-empty-bar">
@@ -426,87 +465,148 @@ export default function SchedulePage({
           </div>
         )}
       </section>
-      {settingsEditor && (
+      {waveEditor && (
         <Modal
-          title={
-            editorEmployer
-              ? `Interview settings for ${editorEmployer.name}`
-              : 'Schedule window and interview length'
-          }
-          onClose={() => setSettingsEditor(null)}
+          title={waveEditor === 'new' ? 'New wave' : `Edit ${waveEditor.name}`}
+          onClose={() => setWaveEditor(null)}
         >
-          <form onSubmit={saveSettings} noValidate>
-            {editorEmployer && (
-              <p className="small muted">Gray values come from the overall settings.</p>
-            )}
+          <form onSubmit={saveWave} noValidate>
             <div className="schedule-form-grid">
               <label>
-                {editorEmployer ? 'Employer start time' : 'Schedule start time'}
+                Wave name
                 <input
-                  type="time"
-                  name="start"
-                  defaultValue={editorEmployer?.scheduling?.start ?? global.start}
-                  className={
-                    editorEmployer && !editorEmployer.scheduling?.start ? 'inherited' : undefined
+                  name="name"
+                  defaultValue={
+                    waveEditor === 'new' ? `Wave ${data.waves.length + 1}` : waveEditor.name
                   }
-                  onChange={(e) => e.currentTarget.classList.remove('inherited')}
                 />
               </label>
               <label>
-                {editorEmployer ? 'Employer end time' : 'Schedule end time'}
+                Rounds
                 <input
-                  type="time"
-                  name="end"
-                  defaultValue={editorEmployer?.scheduling?.end ?? global.end}
-                  className={
-                    editorEmployer && !editorEmployer.scheduling?.end ? 'inherited' : undefined
-                  }
-                  onChange={(e) => e.currentTarget.classList.remove('inherited')}
+                  type="number"
+                  name="rounds"
+                  min="1"
+                  max="50"
+                  step="1"
+                  defaultValue={waveEditor === 'new' ? defaultRounds : waveEditor.rounds}
                 />
               </label>
             </div>
-            <label>
-              {editorEmployer
-                ? 'Employer interview length (minutes)'
-                : 'Default interview length (minutes)'}
-              <input
-                type="number"
-                min="1"
-                max="1440"
-                step="1"
-                name="duration"
-                defaultValue={
-                  editorEmployer
-                    ? (editorEmployer.scheduling?.durationMinutes ?? '')
-                    : global.durationMinutes
-                }
-                placeholder={String(global.durationMinutes)}
-              />
-            </label>
-            {editorEmployer && (
-              <label>
-                Students at once
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  name="parallel"
-                  aria-label="Students at once"
-                  defaultValue={editorEmployer.scheduling?.parallelInterviews ?? 1}
-                />
-              </label>
-            )}
+            <fieldset className="placement-list">
+              <legend>Schools in this wave</legend>
+              {schools.length ? (
+                schools.map((school) => (
+                  <label key={school}>
+                    <input
+                      type="checkbox"
+                      name="schools"
+                      value={school}
+                      defaultChecked={
+                        waveEditor !== 'new' && waveEditor.schools.some((s) => sameName(s, school))
+                      }
+                    />
+                    {school}
+                  </label>
+                ))
+              ) : (
+                <p className="field-help">No schools are recorded for students yet.</p>
+              )}
+            </fieldset>
+            <fieldset className="placement-list">
+              <legend>Students in this wave</legend>
+              <p className="field-help">
+                A student listed here goes in this wave whatever their school.
+              </p>
+              {students.map((student) => (
+                <label key={student.name}>
+                  <input
+                    type="checkbox"
+                    name="students"
+                    value={student.name}
+                    defaultChecked={
+                      waveEditor !== 'new' && waveEditor.students.includes(student.name)
+                    }
+                  />
+                  {student.name}
+                </label>
+              ))}
+            </fieldset>
             {error && (
               <p className="form-error" role="alert">
                 {error}
               </p>
             )}
             <div className="modal-actions">
-              <button type="button" onClick={() => setSettingsEditor(null)}>
+              {waveEditor !== 'new' && (
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => setWaveToRemove(waveEditor)}
+                >
+                  Remove wave
+                </button>
+              )}
+              <button type="button" onClick={() => setWaveEditor(null)}>
+                Cancel
+              </button>
+              <button type="submit" className="primary">
+                Save wave
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {waveToRemove && (
+        <Modal title={`Remove ${waveToRemove.name}?`} onClose={() => setWaveToRemove(null)}>
+          <p>
+            {count(
+              data.schedule.filter((i) => i.wave === waveToRemove.name).length,
+              'scheduled interview'
+            )}{' '}
+            in this wave will be removed, along with its school and student placements.
+          </p>
+          <div className="modal-actions">
+            <button onClick={() => setWaveToRemove(null)}>Cancel</button>
+            <button className="danger" onClick={() => removeWave(waveToRemove)}>
+              Remove wave
+            </button>
+          </div>
+        </Modal>
+      )}
+      {employerEditor && (
+        <Modal
+          title={`Interview settings for ${employerEditor.name}`}
+          onClose={() => setEmployerEditor(null)}
+        >
+          <form onSubmit={saveEmployer} noValidate>
+            <label>
+              Students per round
+              <input
+                type="number"
+                min="1"
+                step="1"
+                name="limit"
+                aria-label="Students per round"
+                aria-describedby="limit-help"
+                defaultValue={studentsPerRound(employerEditor)}
+              />
+              <span className="field-help" id="limit-help">
+                How many students {employerEditor.name} can interview in one round. This is separate
+                from internship places.
+              </span>
+            </label>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="modal-actions">
+              <button type="button" onClick={() => setEmployerEditor(null)}>
                 Cancel
               </button>
               <button className="primary" type="submit">
-                {editorEmployer ? 'Save employer settings' : 'Save schedule settings'}
+                Save employer settings
               </button>
             </div>
           </form>
@@ -520,7 +620,11 @@ export default function SchedulePage({
           <form onSubmit={saveInterview} noValidate>
             <label>
               Student
-              <select name="student" defaultValue={interviewEditor.interview?.student}>
+              <select
+                name="student"
+                aria-label="Student"
+                defaultValue={interviewEditor.interview?.student}
+              >
                 {students.map((s) => (
                   <option key={s.name}>{s.name}</option>
                 ))}
@@ -530,10 +634,8 @@ export default function SchedulePage({
               Employer
               <select
                 name="employer"
+                aria-label="Employer"
                 defaultValue={interviewEditor.interview?.employer ?? interviewEditor.employer}
-                onChange={(e) =>
-                  setInterviewEditor({ ...interviewEditor, employer: e.target.value })
-                }
               >
                 {employers.map((e) => (
                   <option key={e.name}>{e.name}</option>
@@ -542,43 +644,28 @@ export default function SchedulePage({
             </label>
             <div className="schedule-form-grid">
               <label>
-                Start time
-                <input
-                  type="time"
-                  name="time"
-                  defaultValue={
-                    interviewEditor.interview?.time ?? interviewEditor.time ?? global.start
-                  }
-                />
+                Wave
+                <select
+                  name="wave"
+                  aria-label="Wave"
+                  defaultValue={interviewEditor.interview?.wave ?? interviewEditor.wave}
+                >
+                  {data.waves.map((w) => (
+                    <option key={w.name}>{w.name}</option>
+                  ))}
+                </select>
               </label>
               <label>
-                Length override (minutes)
+                Round
                 <input
                   type="number"
-                  name="duration"
-                  aria-label="Interview length override (minutes)"
-                  aria-describedby="duration-override-help"
+                  name="round"
                   min="1"
-                  max="1440"
                   step="1"
-                  defaultValue={interviewEditor.interview?.durationMinutes ?? ''}
-                  placeholder={String(draftDuration)}
+                  defaultValue={interviewEditor.interview?.round ?? interviewEditor.round ?? 1}
                 />
-                <span className="field-help" id="duration-override-help">
-                  Leave blank to use the employer’s interview length.
-                </span>
               </label>
             </div>
-            <label>
-              Round
-              <input
-                type="number"
-                name="round"
-                min="1"
-                step="1"
-                defaultValue={interviewEditor.interview?.round ?? 1}
-              />
-            </label>
             {error && (
               <p className="form-error" role="alert">
                 {error}

@@ -1215,7 +1215,8 @@ summary {
 .schedule-summary {
   display: flex;
   flex-wrap: wrap;
-  align-items: stretch;
+  align-items: center;
+  justify-content: space-between;
   gap: 14px;
   margin-bottom: 24px;
 }
@@ -1223,116 +1224,177 @@ summary {
   margin: 0;
   align-items: stretch;
 }
-.schedule-settings-button {
-  justify-content: flex-start;
-  gap: 24px;
-  text-align: left;
-  padding: 12px 16px;
-}
-.schedule-settings-button > div {
+.school-legend {
+  list-style: none;
   display: flex;
-  flex-direction: column;
-  gap: 5px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
-.schedule-settings-button span {
-  font-size: 11px;
-  color: var(--text-muted);
+.school-legend li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
-.schedule-settings-button strong {
-  font-size: 13px;
+.school-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid #0000001a;
 }
-.schedule-settings-button > svg {
-  color: var(--accent-text);
-}
-.timetable-scroll {
-  max-height: min(75vh, 850px);
+.wave-scroll {
+  /* Tall enough to fill the window once the page is scrolled to the grid, and wheel events
+     chain to the page at the grid's edges so the page stays scrollable over the table. */
+  max-height: calc(100vh - 48px);
   overflow: auto;
-  overscroll-behavior: contain;
   position: relative;
   isolation: isolate;
   scrollbar-gutter: stable;
 }
-.timetable-scroll:focus-visible {
+.wave-scroll:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: -3px;
 }
-.schedule-grid {
-  display: grid;
-  width: 100%;
-  position: relative;
+.wave-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
 }
-.time-corner,
-.timetable-employer {
+.wave-grid th,
+.wave-grid td {
+  text-align: left;
+  vertical-align: top;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.wave-grid thead th {
   position: sticky;
   top: 0;
   z-index: 4;
   background: var(--surface-muted);
-  border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border-strong);
+  padding: 8px 10px;
+  min-width: 190px;
+  font-weight: 550;
 }
-.time-corner {
+.wave-grid th.round-heading {
   left: 0;
   z-index: 6;
+  min-width: 92px;
+  width: 92px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
-.timetable-employer {
-  padding: 8px 10px;
-  min-width: 0;
-}
-.timetable-employer-name,
-.timetable-interview-heading {
+.wave-employer-name {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 5px;
 }
-.timetable-employer-name h2 {
+.wave-employer-name h2 {
   font-size: 13px;
   line-height: 1.35;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
-.timetable-employer p {
+.wave-grid thead th p {
   font-size: 11px;
   color: var(--text-muted);
-  margin: 1px 0 0;
+  margin: 2px 0 0;
+  font-weight: 450;
 }
-.timetable-employer .timetable-employer-settings {
-  margin: 0;
-  color: var(--text-muted);
-}
-.time-label {
+.wave-row th {
   position: sticky;
   left: 0;
   z-index: 3;
-  padding: 3px 8px;
-  background: var(--surface-muted);
-  color: var(--text-muted);
+  background: var(--accent);
+  color: #fff;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.wave-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.wave-heading span {
+  font-weight: 450;
   font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 550;
-  border-right: 1px solid var(--border);
-  border-top: 1px solid var(--border);
+  opacity: 0.92;
+}
+.wave-heading .icon-button,
+.wave-employer-name .icon-button,
+.student-chip .icon-button {
+  min-height: 20px;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 5px;
+  color: var(--accent-text);
+  background: #ffffffc9;
+}
+.wave-heading .icon-button svg,
+.wave-employer-name .icon-button svg,
+.student-chip .icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+.round-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  padding: 8px 10px;
   white-space: nowrap;
 }
-.timetable-slot {
-  min-width: 0;
-  border-top: 1px solid var(--border);
-  border-right: 1px solid var(--border);
+.schedule-cell {
   background: #fff;
-  position: relative;
+  padding: 4px;
+  min-height: 40px;
 }
-.timetable-slot.unavailable {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--surface-sunken),
-    var(--surface-sunken) 5px,
-    var(--surface-muted) 5px,
-    var(--surface-muted) 10px
-  );
+.schedule-cell.drag-over {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent-border);
+}
+.student-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 2px 0;
+  padding: 4px 7px;
+  border: 1px solid #0000001f;
+  border-radius: 4px;
+  background: #f1f1ec;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.student-chip span {
+  overflow-wrap: anywhere;
+}
+.student-chip[draggable='true'] {
+  cursor: grab;
+}
+.student-chip.has-conflict {
+  outline: 2px solid var(--danger-text);
+  outline-offset: -2px;
+}
+.student-chip.has-warning {
+  outline: 2px dashed var(--warning-text);
+  outline-offset: -2px;
 }
 .slot-add {
-  position: absolute;
-  right: 6px;
-  bottom: 5px;
-  z-index: 2;
+  display: block;
+  margin: 2px 0 0 auto;
   min-height: 20px;
   width: 20px;
   padding: 0;
@@ -1342,68 +1404,36 @@ summary {
   font-size: 14px;
   opacity: 0.5;
 }
-.timetable-slot:hover .slot-add,
+.schedule-cell:hover .slot-add,
 .slot-add:focus-visible {
   opacity: 1;
 }
-.timetable-interview {
-  position: relative;
-  z-index: 1;
-  align-self: stretch;
-  min-width: 0;
-  margin-top: 2px;
-  margin-bottom: 2px;
-  padding: 4px 7px;
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  border-left: 3px solid var(--accent);
-  border-radius: 4px;
-  overflow: auto;
-}
-.timetable-interview h3 {
-  font-size: 12px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-.timetable-interview-heading .icon-button,
-.timetable-employer-name .icon-button {
-  min-height: 20px;
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-  border-radius: 5px;
-  color: var(--accent-text);
-  background: #ffffffc9;
-}
-.timetable-interview-heading .icon-button svg,
-.timetable-employer-name .icon-button svg {
-  width: 14px;
-  height: 14px;
-}
-.timetable-interview-footer {
+.placement-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.placement-list legend {
+  font-size: 12px;
+  font-weight: 550;
+  padding: 0 4px;
+}
+.placement-list label {
+  display: flex;
   align-items: center;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 450;
 }
-.timetable-interview-footer span + span::before {
-  content: '·';
-  margin: 0 5px;
-}
-.timetable-interview.has-conflict {
-  background: var(--danger-bg);
-  border-color: var(--danger-border);
-  border-left-color: var(--danger-text);
-}
-.interview-conflict-label {
-  display: block;
-  color: var(--danger-text);
-  font-size: 10px;
-  font-weight: 650;
-  margin-top: 2px;
+.placement-list .field-help {
+  margin: 0 0 4px;
 }
 .schedule-issues li {
   margin-bottom: 7px;
@@ -1436,11 +1466,6 @@ summary {
   margin-bottom: 18px;
 }
 @media (max-width: 720px) {
-  .schedule-settings-button {
-    gap: 14px;
-    flex-wrap: wrap;
-    width: 100%;
-  }
   .schedule-summary .stats {
     width: 100%;
   }

@@ -16,26 +16,27 @@ export interface Employer {
   scheduling?: EmployerScheduling
 }
 
-export interface ScheduleSettings {
-  start: string
-  end: string
-  durationMinutes: number
+// Interviews happen in waves (one group of schools at a time, usually by distance), and each
+// wave runs a fixed number of rounds. A student interviews with one employer per round.
+export interface Wave {
+  name: string
+  rounds: number
+  // Schools and students the coordinator placed in this wave. A student entry overrides
+  // the student's school.
+  schools: string[]
+  students: string[]
 }
 
 export interface EmployerScheduling {
-  start?: string
-  end?: string
-  durationMinutes?: number
-  parallelInterviews?: number
+  studentsPerRound?: number
 }
 
 export interface ScheduledInterview {
   id: string
   student: string
   employer: string
-  time: string
+  wave: string
   round: number
-  durationMinutes?: number
 }
 
 export interface Placement {
@@ -59,8 +60,8 @@ export interface Workspace {
   students: Record<string, Student>
   employers: Employer[]
   industries?: string[]
+  waves: Wave[]
   schedule: ScheduledInterview[]
-  scheduleSettings?: ScheduleSettings
   placements: Placement[]
   // The last generated matching, so manual edits can be told apart. Emptied with placements;
   // missing for imported workspaces, where the origin of placements is unknown.
@@ -70,7 +71,6 @@ export interface Workspace {
   matchingApproved: boolean
   interviewDate: string
   sourcePath?: string
-  sourceSnapshotPath?: string
   sourceName?: string
   importedAt?: string
 }
@@ -78,6 +78,7 @@ export interface Workspace {
 export const emptyWorkspace = (): Workspace => ({
   students: {},
   employers: [],
+  waves: [],
   schedule: [],
   placements: [],
   scheduleApproved: false,
